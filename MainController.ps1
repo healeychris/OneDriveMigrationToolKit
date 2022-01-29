@@ -16,7 +16,7 @@
  ##
 
 ####### Variable list #######
-$Version                                                = "0.1"                                          # Version of script
+$Version                                                = "0.2"                                          # Version of script
 Clear-Host                                                                                               # Clear screen
 $host.ui.RawUI.WindowTitle                              = 'OneDrive Migration Tool Kit'                  # Set name in task bar
 $DBName                                                 = "OneDriveDiscovery.db"                         # Database Name used to store and create if not existing
@@ -31,7 +31,7 @@ $RequireConnectMicrosoftSharePoint                      = $true                 
 $PreloadOneDriveSites                                   = $true                                          # Used to preload OneDrive sites and not perform single lookups
 $AdminSiteURL                                           = "https://cnainsurance-admin.sharepoint.com"    # Admin URL for Tenant
 $PermissionsGroup                                       = "Domain Admins"                                # Permissions object to add to ACL permissions
-$AdminPermissions                                       = "Domain Admins"                         # Permissions to be check on directory when using get-acl
+$AdminPermissions                                       = "CNAW2K\Domain Admins"                         # Permissions to be check on directory when using get-acl
 $IgnoreDirectories                                      = "Windows PowerShell|.cache"                    # Directories to be excluded from checking when running get-acl
 $PreloadOneDriveSites                                   = $true                                          # Preload all OneDrive details and not one at a time
 $DatabaseConnected                                      = $false                                         # Preset Database connection to false, reset on DB connection function
@@ -132,6 +132,7 @@ function ShowMenuSelectOperations {
     Write-host "(20) - Find PST Files on Home Drives - MultiThread"
     Write-host "(21) - Perform a User Home Drive permissions ADD using Takeowns - MultiThread"
     Write-host "(22) - Find the size of a users HomeDrive - MultiThread"
+    Write-host "(23) - Check Home Drives for Permission Access issues - MultiThread"
 
 
     $input = read-host " *** Please select a number to perform the operation *** "
@@ -165,9 +166,11 @@ function ShowMenuSelectOperations {
     }
     
     '1' {
-        # Check Home Drives for Permission Access issues - SingleThread
-         
+        $Script:JobType = 'Check Home Drives for Permission Access issues - SingleThread'
+         # Functions
          Splitline
+         BatchInformation
+         CreateOperationCollector
          Foreach ($ADUser in $ADUserInfo){
             
             # Build Strings
@@ -177,10 +180,12 @@ function ShowMenuSelectOperations {
             [string]$HomedriveServer = $HomeDrivePath -split '\\' | select-object -Skip 2 -Last 1
             
             # Functions
+            GetServerShareSplit
             TestConnection
             TestPathHomeDrive
             SimplePermissionsCheck
             Splitline 
+            SaveStoredResults
 
             }
 
@@ -188,9 +193,12 @@ function ShowMenuSelectOperations {
     }
 
     '2' {
-        # Find PST Files on Home Drives - SingleThread"
+        $Script:JobType = 'Find PST Files on Home Drives - SingleThread'
 
+            # Functions
             Splitline
+            BatchInformation
+            CreateOperationCollector
             Foreach ($ADUser in $ADUserInfo){
             
             # Build Strings
@@ -205,7 +213,7 @@ function ShowMenuSelectOperations {
             TestPathHomeDrive
             SimplePermissionsCheck
             FindPSTFiles
-            WriteTransactionsLogs -Task "Finished running PST Search" -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+            SaveStoredResults
             Splitline 
             }
         
@@ -218,8 +226,12 @@ function ShowMenuSelectOperations {
 	}
 
     '4' {
-        # Perform a User Home Drive permissions ADD using Takeowns - SingleThread
-
+        # 
+        $Script:JobType = 'Perform a User Home Drive permissions ADD using Takeowns - SingleThread'
+         # Functions
+         Splitline
+         BatchInformation
+         CreateOperationCollector
             Foreach ($ADUser in $ADUserInfo){
             
             # Build Strings
@@ -228,7 +240,7 @@ function ShowMenuSelectOperations {
             $SamaccountName          = $ADUser.SamaccountName
             [string]$HomedriveServer = $HomeDrivePath -split '\\' | select-object -Skip 2 -Last 1
             
-            # Functions            
+            # Functions         
             GetServerShareSplit
             TestConnection
             TestPathHomeDrive
@@ -236,14 +248,19 @@ function ShowMenuSelectOperations {
             TakeownTool
             WriteTransactionsLogs -Task "Finished running Takeown on $HomeDrivePath for $UPN" -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
             IcaclsPermissions
-
+            SaveStoredResults
             }
 
 	}
 
     '5' {
         # Find the size of a users HomeDrive - SingleThread
+         $Script:JobType = 'Find the size of a users HomeDrive - SingleThread'
 
+         # Functions
+         Splitline
+         BatchInformation
+         CreateOperationCollector
          Foreach ($ADUser in $ADUserInfo){
             
             # Build Strings
@@ -256,15 +273,21 @@ function ShowMenuSelectOperations {
             GetServerShareSplit
             TestConnection
             TestPathHomeDrive
+            SimplePermissionsCheck
             GetHomeDirectorySize
-            Splitline 
+            SaveStoredResults
+            Splitline
             }
 
 
 	}
 
     '20' {
-        # Find PST Files on Home Drives - MultiThread
+        # 
+         $Script:JobType = 'Find PST Files on Home Drives - MultiThread'
+         # Functions
+         Splitline
+         BatchInformation
 
             Foreach ($ADUser in $ADUserInfo){
             
@@ -273,23 +296,25 @@ function ShowMenuSelectOperations {
             $UPN                     = $ADUser.UserPrincipalName
             $SamaccountName          = $ADUser.SamaccountName
             [string]$HomedriveServer = $HomeDrivePath -split '\\' | select-object -Skip 2 -Last 1
-
             
             # Run Multithread call
             Start-ThreadJob -ThrottleLimit $ThrottleLimit  -InitializationScript $export_functions -ScriptBlock {
+            $nextbatch = $using:nextbatch
             $HomeDrivePath = $using:HomeDrivePath
             $UPN = $using:UPN
             $SamaccountName = $Using:SamaccountName
             $HomedriveServer = $Using:HomeDriveServer
             $DBName = $using:DBName
-            GetServerShareSplit
             CheckforPSliteDBModule
             ImportPSliteDBModule
             DatabaseConnection
+            CreateOperationCollector
+            GetServerShareSplit
             TestConnection
             TestPathHomeDrive
             SimplePermissionsCheck
             FindPSTFiles
+            SaveStoredResults
             } | Out-Null
 
             } # Close foreach
@@ -301,7 +326,11 @@ function ShowMenuSelectOperations {
         }
 
     '21' {
-        # Perform a User Home Drive permissions ADD using Takeowns - MultiThread
+        # 
+         $Script:JobType = 'Perform a User Home Drive permissions ADD using Takeowns - MultiThread'
+         # Functions
+         Splitline
+         BatchInformation
 
             Foreach ($ADUser in $ADUserInfo){
             
@@ -314,20 +343,23 @@ function ShowMenuSelectOperations {
             
             # Run Multithread call
             $job = Start-ThreadJob -ThrottleLimit $ThrottleLimit  -InitializationScript $export_functions -ScriptBlock {
+            $nextbatch = $using:nextbatch
             $HomeDrivePath = $using:HomeDrivePath
             $UPN = $using:UPN
             $SamaccountName = $Using:SamaccountName
             $HomedriveServer = $Using:HomeDriveServer
             $DBName = $using:DBName
-            GetServerShareSplit
             CheckforPSliteDBModule
             ImportPSliteDBModule
             DatabaseConnection
+            CreateOperationCollector
+            GetServerShareSplit
             TestConnection
             TestPathHomeDrive
             WriteTransactionsLogs -Task "Running Takeown and Icacl on $HomeDrivePath for $UPN Please wait..." -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
             TakeownTool
             IcaclsPermissions
+            SaveStoredResults
             } | Out-Null
 
 
@@ -340,6 +372,10 @@ function ShowMenuSelectOperations {
 
 '22' {
         # Find the size of a users HomeDrive - MultiThread
+        $Script:JobType = 'Find the size of a users HomeDrive - MultiThread'
+         # Functions
+         Splitline
+         BatchInformation
 
             Foreach ($ADUser in $ADUserInfo){
             
@@ -352,18 +388,67 @@ function ShowMenuSelectOperations {
             
             # Run Multithread call
             $job = Start-ThreadJob -ThrottleLimit $ThrottleLimit  -InitializationScript $export_functions -ScriptBlock {
+            $Script:JobType = $using:JobType
+            $nextbatch = $using:nextbatch
             $HomeDrivePath = $using:HomeDrivePath
             $UPN = $using:UPN
             $SamaccountName = $Using:SamaccountName
             $HomedriveServer = $Using:HomeDriveServer
             $DBName = $using:DBName
-            GetServerShareSplit
             CheckforPSliteDBModule
             ImportPSliteDBModule
             DatabaseConnection
+            CreateOperationCollector
+            GetServerShareSplit
             TestConnection
             TestPathHomeDrive
+            SimplePermissionsCheck
             GetHomeDirectorySize
+            SaveStoredResults
+            } | Out-Null
+
+
+            } # Close foreach
+            MultithreadGetEvents
+            WriteTransactionsLogs -Task "Finished getting Directory homedrive sizes" -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+            
+
+
+	}
+'23' {
+        #
+        $Script:JobType = 'Check Home Drives for Permission Access issues - MultiThread'
+         # Functions
+         Splitline
+         BatchInformation
+
+            Foreach ($ADUser in $ADUserInfo){
+            
+            # Build Strings
+            $HomeDrivePath           = $ADUser.HomeDirectory
+            $UPN                     = $ADUser.UserPrincipalName
+            $SamaccountName          = $ADUser.SamaccountName
+            [string]$HomedriveServer = $HomeDrivePath -split '\\' | select-object -Skip 2 -Last 1
+
+            
+            # Run Multithread call
+            $job = Start-ThreadJob -ThrottleLimit $ThrottleLimit  -InitializationScript $export_functions -ScriptBlock {
+            $Script:JobType = $using:JobType
+            $nextbatch = $using:nextbatch
+            $HomeDrivePath = $using:HomeDrivePath
+            $UPN = $using:UPN
+            $SamaccountName = $Using:SamaccountName
+            $HomedriveServer = $Using:HomeDriveServer
+            $DBName = $using:DBName
+            CheckforPSliteDBModule
+            ImportPSliteDBModule
+            DatabaseConnection
+            CreateOperationCollector
+            GetServerShareSplit
+            TestConnection
+            TestPathHomeDrive
+            SimplePermissionsCheck
+            SaveStoredResults
             } | Out-Null
 
 
@@ -486,9 +571,16 @@ function DatabaseConnection () {
             WriteTransactionsLogs -Task "Checking for Database Collections" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError False -ExportData False
             New-LiteDBCollection Transactions -ErrorAction SilentlyContinue -WarningAction SilentlyContinue 
             New-LiteDBCollection UserReports -ErrorAction SilentlyContinue -WarningAction SilentlyContinue 
-
+            New-LiteDBCollection BatchInformation -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+            New-LiteDBCollection SimplePermissionsCheck -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+            New-LiteDBCollection PSTSessionDetails -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+            New-LiteDBCollection IcaclsPermissions -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+            New-LiteDBCollection TakeownPermissions -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+            New-LiteDBCollection GetHomeDirectorySize -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+            New-LiteDBCollection TestPathHomeDrive -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+            New-LiteDBCollection Operations -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             
-    
+
         }
     }
 
@@ -980,8 +1072,8 @@ function GetServerShareSplit () {
 
     
     # Write data to database 
-    #$Report | Add-Member -MemberType NoteProperty -Name HostingServer -Value $HomedriveServer -Force
-    #$Report | Add-Member -MemberType NoteProperty -Name HostingShare -Value $HomedriveShare -Force
+    $script:Operations | Add-Member -MemberType NoteProperty -Name HostingServer -Value $HomedriveServer -Force
+    $script:Operations | Add-Member -MemberType NoteProperty -Name HostingShare -Value $HomedriveShare -Force
     
 
 
@@ -989,23 +1081,23 @@ function GetServerShareSplit () {
 
 
 # FUNCTION -  Test Connection to server using $homeDriveServer variable
-function TestConnection () {
-  
+function TestConnection () {    
+         
     # Test connection to server 
     Try {$TestConnection = Test-connection -Count 2 -ComputerName $HomedriveServer -ResolveDestination -EA Stop  
         WriteTransactionsLogs -Task "Successfully connected to $HomedriveServer for $SamaccountName" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError False
-        #$Report | Add-Member -MemberType NoteProperty -Name TestConnection -Value "Passed" -Force
+        $script:Operations | Add-Member -MemberType NoteProperty -Name TestConnection -Value "Passed" -Force
 
         # Find Server domain name
         $Testconnection = $Testconnection | Select-Object -First 1
         $Dot = $Testconnection.Destination.IndexOf(".")
         $ServerDomain = $testconnection.Destination.Substring(1+$dot)
 
-        #$Report | Add-Member -MemberType NoteProperty -Name ServerDomain -Value "$ServerDomain" -Force 
+        $script:Operations | Add-Member -MemberType NoteProperty -Name ServerDomain -Value "$ServerDomain" -Force 
     }
     
     Catch{WriteTransactionsLogs -Task "Failed to connect to $HomedriveServer for $SamaccountName " -Result ERROR -ErrorMessage "Test-Connection Failed:" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true
-        #$Report | Add-Member -MemberType NoteProperty -Name TestConnection -Value "Failed" -Force    
+        $script:Operations | Add-Member -MemberType NoteProperty -Name TestConnection -Value "Failed" -Force    
 
     }
     
@@ -1014,16 +1106,15 @@ function TestConnection () {
 # FUNCTION - TestPath of Home Drive Directory
 function TestPathHomeDrive () {
 
-
     # Test if HomeDirectory path is vaild
     Try {$Testpath = Test-path -Path $HomeDrivePath -EA Stop 
             
         If ($Testpath -eq $true){WriteTransactionsLogs -Task "Successful Testpath to $HomeDrivePath for $SamaccountName " -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError False
             $script:HomeDirectoryValid = $True
-            #$Report | Add-Member -MemberType NoteProperty -Name TestPath -Value "Passed" -Force  
+            $script:Operations| Add-Member -MemberType NoteProperty -Name TestPath -Value "Passed" -Force  
         }
         If ($Testpath -eq $false){WriteTransactionsLogs -Task "Failed Testpath to $HomeDrivePath for $SamaccountName " -Result Error -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true
-            #$Report | Add-Member -MemberType NoteProperty -Name TestPath -Value "Failed" -Force
+            $script:Operations | Add-Member -MemberType NoteProperty -Name TestPath -Value "Failed" -Force
         }
     }
         
@@ -1036,6 +1127,8 @@ function TestPathHomeDrive () {
 # FUNCTION - Get HomeDrive Size
 function GetHomeDirectorySize () {
 
+    if ($Global:AllowDriveAccess -eq $true){
+
     WriteTransactionsLogs -Task "Calculating HomeDirectory Size.....Please Wait" -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
         
     if ($HomeDirectoryValid -eq $True) { # Change later in script as var not set anywhere
@@ -1047,15 +1140,20 @@ function GetHomeDirectorySize () {
     }
     Else {
         WriteTransactionsLogs -Task "Failed to get the HomeDirectory details" -Result Error -ErrorMessage "No Access or other error" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true
-        #$ADUserInfo | Add-Member -MemberType NoteProperty -Name HomeDirectorySize -Value 'No Data' -Force
     } 
     
-    if ($HomeDriveSize -ge '0'){WriteTransactionsLogs -Task "$UPN has Home Drive Size of $TotalSize" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false}     
-    if (!($HomeDriveSize)){WriteTransactionsLogs -Task "Possible Permission issues on $UPN drive $HomeDrivePath" -Result Information -ErrorMessage "No Access or Permissions Issue" -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false} 
+    if ($HomeDriveSize -ge '0'){WriteTransactionsLogs -Task "$UPN has Home Drive Size of $TotalSize" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+        $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeDirectorySize"-Value $TotalSize} 
+            
+    
+   }
+   Else {WriteTransactionsLogs -Task "Skipped Drive Size Check for $SamaccountName on $HomeDrivePath as failed simple drive access check" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+        $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeDirectoryInfo"-Value 'Failed simple drive access check'}
+
 }
 
 
-# FUNCTION - Check access using Get-ACL on directories to see access denid errors
+# FUNCTION - Check access using Get-ACL on directories to see access denied errors
 function CheckAccessDirectories () {
 
     WriteTransactionsLogs -Task "Finding Directories for $SamaccountName on $HomeDrivePath... please wait" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
@@ -1187,6 +1285,9 @@ function CheckForExcludedUser () {
 function TakeownTool () {
     
     takeown /F $HomeDrivePath\Data /R /A /D Y
+
+        # Build PScustomObject
+        $script:Operations | Add-Member -MemberType NoteProperty -Name "TakeownRun"-Value $True
         
 }
 
@@ -1196,26 +1297,10 @@ function IcaclsPermissions () {
     WriteTransactionsLogs -Task "Running icacls on $HomeDrivePath Please wait..." -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false    
     icacls $HomeDrivePath\Data /grant "Domain Admins:(OI)(CI)F" /T
 
-    # Check if test folders exist for get-acl
-    try {$Desktop        = Test-Path $HomeDrivePath\DATA\Desktop -ea stop} catch {}
-    try {$Documents      = Test-Path $HomeDrivePath\DATA\Documents -ea stop} catch {}
-    
-    try {if ($Desktop -eq $true)
-        {$FullPermissions = Get-Acl -ea stop "$HomeDrivePath\DATA\Desktop" ;$Permissions = $FullPermissions.access | Where-Object {$_.IdentityReference -match $PermissionsGroup} | Select-Object IdentityReference,FileSystemRights}
-        Else {WriteTransactionsLogs -Task "No Access to $HomeDrivePath\DATA\Desktop for $UPN, Investigating Needed" -Result information -ErrorMessage "ERROR" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false}
-    }
-    Catch {$ErrorMessageDetails = $error[0].Exception.message
-        WriteTransactionsLogs -Task "Failed Takeown on $HomeDrivePath on $UPN" -Result information -ErrorMessage "ERROR" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false
-    }
 
-    try {if ($Documents -eq $true)
-        {$FullPermissions = Get-Acl -ea stop "$HomeDrivePath\DATA\Documents" ;$Permissions = $FullPermissions.access | Where-Object {$_.IdentityReference -match $PermissionsGroup} | Select-Object IdentityReference,FileSystemRights}
-        Else {WriteTransactionsLogs -Task "No Access to $HomeDrivePath\DATA\Documents for $UPN, Investigating Needed" -Result information -ErrorMessage "ERROR" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false}
-    }
-    Catch {$ErrorMessageDetails = $error[0].Exception.message
-        WriteTransactionsLogs -Task "Failed Takeown on $HomeDrivePath on $UPN" -Result information -ErrorMessage "ERROR" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false
-    }
-
+        # Build PScustomObjec
+        $script:Operations | Add-Member -MemberType NoteProperty -Name "IcaclsPermermissionsRun"-Value $True
+        
 }
 
 
@@ -1235,6 +1320,7 @@ function FindPSTFiles () {
 
     WriteTransactionsLogs -Task "Completed PST Search for $SamaccountName on $HomeDrivePath and found $PSTFileCount PST's" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
     $JobCurrentStatus = 'Completed'
+    $script:Operations | Add-Member -MemberType NoteProperty -Name "PSTFilesFound"-Value $PSTFileCount -force
     
    
     if ($PSTFilesList){
@@ -1267,28 +1353,36 @@ function FindPSTFiles () {
         # If not address found build string to say not found
         If (!$SMTPAddress){$SMTPAddress = 'No Address Found for User'}
 
+         # Build PScustomObject
 
-        #$PSTSessionDetails = [pscustomobject][ordered]@{}
-        #$PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "Samaccountname"-Value $Samaccountname
-        #$PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "HomeDirectory"-Value $HomeDirectory
-        #$PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "Name"-Value $name
-        #$PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "CreationTime"-Value $CreationTime
-        #$PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "LastWriteTime"-Value $LastWriteTime
-        #$PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "LastAccessTime"-Value $LastAccessTime
-        #$PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "fullname"-Value $fullname
-        #$PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "FileSize"-Value $FileSize
-        #$PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "ServerName"-Value $HomedriveServer
-        #$PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "WhenDiscovered"-Value $DateNow
-        #$PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "OwnerSMTPaddress"-Value $SMTPAddress
+        $PSTSessionDetails  = @()
+        $PSTSessionDetails = [pscustomobject][ordered]@{}
+        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "BatchID" -Value "$nextbatch" -force
+        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "Samaccountname"-Value $Samaccountname
+        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "HomeDirectory"-Value $HomeDrivePath
+        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "Name"-Value $name
+        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "CreationTime"-Value $CreationTime
+        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "LastWriteTime"-Value $LastWriteTime
+        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "LastAccessTime"-Value $LastAccessTime
+        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "fullname"-Value $fullname
+        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "FileSize"-Value $FileSize
+        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "ServerName"-Value $HomedriveServer
+        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "WhenDiscovered"-Value $DateNow
+        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "OwnerSMTPaddress"-Value $SMTPAddress
 
-        # Add PST Details to Database 
-        #$PSTSessionDetails | ConvertTo-LiteDbBSON | Add-LiteDBDocument -Collection PSTList
+        # Add Batch Details to Database 
+        Open-LiteDBConnection $DBName -Mode shared | Out-Null
+        $PSTSessionDetails | ConvertTo-LiteDbBSON | Add-LiteDBDocument -Collection PSTSessionDetails
+        Close-liteDBConnection
+
         }
         
    }
+   $script:Operations | Add-Member -MemberType NoteProperty -Name "PSTSearchInformation"-Value 'Completed' -force
 
    }
-   Else {WriteTransactionsLogs -Task "Skipped PST Search for $SamaccountName on $HomeDrivePath as failed simple drive access check" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false}
+   Else {WriteTransactionsLogs -Task "Skipped PST Search for $SamaccountName on $HomeDrivePath as failed simple drive access check" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+    $script:Operations | Add-Member -MemberType NoteProperty -Name "PSTSearchInformation"-Value 'Skipped due to Drive Access Check Fail' -force}
 }
 
 
@@ -1322,14 +1416,13 @@ function SimplePermissionsCheck () {
         WriteTransactionsLogs -Task "Failed Simple check on $HomeDrivePath on $UPN" -Result information -ErrorMessage "ERROR" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false
            $Global:AllowDriveAccess = $false }
 
-    #write-host $Global:AllowDriveAccess
 
-    #if ([string]::IsNullOrWhiteSpace($Global:DriveAccessAllowed)){$Global:DriveAccessAllowed = $true}
-
-    #write-host $Global:DriveAccessAllowed
     if ($Global:AllowDriveAccess -eq $true){WriteTransactionsLogs -Task "Passed simple permissions check on $HomeDrivePath" -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false}
     if ($Global:AllowDriveAccess -eq $false){WriteTransactionsLogs -Task "Failed simple permissions check on $HomeDrivePath" -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false}
 
+
+        # Build PScustomObject
+        $Operations | Add-Member -MemberType NoteProperty -Name "AllowDriveAccess" -Value $Global:AllowDriveAccess -force
 
 }
 
@@ -1343,7 +1436,110 @@ Write-host "--------------------------------------------------------------------
 }
 
 
+function BatchInformation () {
+    
+    # Get-date
+    $datenow = Get-Date -f g
 
+    # Open Database Connection
+    Open-LiteDBConnection $DBName -Mode shared | Out-Null
+
+    # Clean up variable
+    Remove-Variable nextbatch -Scope Global -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+ 
+    # Find if any batches have been created before
+    $AnyExistingBatches = Find-LiteDBDocument -Collection 'batchinformation'
+
+    if ($AnyExistingBatches){
+     
+        # Find last batch ID
+        [int]$lastbatch = Find-LiteDBDocument -Collection 'batchinformation' | Select-Object -ExpandProperty  _id | Select-Object -First 1
+
+        # New batch ID
+        [int]$Global:nextbatch = $lastbatch + '1'
+
+        }
+
+        # Build Pre information for report
+        $ADUserInfoCount = $ADUserInfo.count
+        $AdminRunBy = whoami
+
+
+        # Build PScustomObject
+        $BatchReport = @()
+        $BatchReport = [pscustomobject][ordered]@{}
+
+        if ($Global:nextbatch) {$BatchReport | Add-Member -MemberType NoteProperty -Name "_id" -Value "$nextbatch" -force}
+        if (!($Global:nextbatch)){$BatchReport | Add-Member -MemberType NoteProperty -Name "_id" -Value "1" -force ;$global:nextbatch = '1' }
+        
+        $BatchReport | Add-Member -MemberType NoteProperty -Name "DateJobCreation" -Value "$datenow" -force
+        $BatchReport | Add-Member -MemberType NoteProperty -Name "UserCount" -Value $ADUserInfoCount -force
+        $BatchReport | Add-Member -MemberType NoteProperty -Name "JobType" -Value $script:JobType -force
+        $BatchReport | Add-Member -MemberType NoteProperty -Name "ScriptVersion" -Value $Version -force
+        $BatchReport | Add-Member -MemberType NoteProperty -Name "AdminRunBy" -Value $AdminRunBy -force
+
+        # Add Batch Details to Database 
+        $BatchReport | ConvertTo-LiteDbBSON | Add-LiteDBDocument -Collection batchinformation
+        Close-liteDBConnection
+
+}
+
+# FUNCTION - Create operation collector
+function CreateOperationCollector () {
+
+
+    # Build PScustomObject for operations events
+    $Script:Operations = @()
+    $Script:Operations = [pscustomobject][ordered]@{}
+
+
+}
+
+# FUNCTION - Check Powershell version 
+function CheckPSVersion () {
+
+    if ($PSVersionTable.PSVersion.Major -ge '7') {}
+    Else {
+    
+    Write-host
+    Write-host
+    Write-host
+    Write-host "Powershell 7 and above is required to run this script. This script will now close." -ForegroundColor YELLOW 
+    Write-host
+    Write-host
+
+    Exit
+       
+    
+    }
+
+
+}
+
+# FUNCTION - Store Collected Data
+function SaveStoredResults () {
+
+
+    $script:Operations  | Add-Member -MemberType NoteProperty -Name "BatchID" -Value "$nextbatch" -force
+    $script:Operations  | Add-Member -MemberType NoteProperty -Name "UPN" -Value "$UPN" -force
+    $script:Operations  | Add-Member -MemberType NoteProperty -Name "SamAccountName"-Value $SamaccountName -force
+    $script:Operations  | Add-Member -MemberType NoteProperty -Name "HomeDrivePath" -Value $HomeDrivePath -force
+    $script:Operations  | Add-Member -MemberType NoteProperty -Name "JobType" -Value $JobType -force
+
+    # Add Batch Details to Database 
+    Open-LiteDBConnection $DBName -Mode shared | Out-Null
+    $script:Operations | ConvertTo-LiteDbBSON | Add-LiteDBDocument -Collection Operations
+    Close-liteDBConnection
+
+    # Clear existing data
+    Remove-Variable Operations -Scope script -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+
+    
+    # Build PScustomObject for operations events
+    $Script:Operations = @()
+    $Script:Operations = [pscustomobject][ordered]@{}
+
+}
 
 
 
@@ -1373,12 +1569,18 @@ function SharePointCheckLicence{$function:SharePointCheckLicence}
 function SimplePermissionsCheck{$function:SimplePermissionsCheck}
 function IcaclsPermissions{$function:IcaclsPermissions}
 function GetHomeDirectorySize{$function:GetHomeDirectorySize}
+function BatchInformation{$function:BatchInformation}
+function SaveStoredResults{$function:SaveStoredResults}
+function CreateOperationCollector{$function:CreateOperationCollector}
+
+
 
 "@)
 
 
 # Run main function to call others
 DisplayExtendedInfo
+CheckPSVersion
 ShowMenuSelectUsers
 
 
