@@ -35,7 +35,7 @@ $AdminPermissions                                       = "CNAW2K\Domain Admins"
 $IgnoreDirectories                                      = "Windows PowerShell|.cache"                    # Directories to be excluded from checking when running get-acl
 $PreloadOneDriveSites                                   = $true                                          # Preload all OneDrive details and not one at a time
 $DatabaseConnected                                      = $false                                         # Preset Database connection to false, reset on DB connection function
-$ThrottleLimit                                          = '2'                                           # Throttle limit when using multi-threaded Jobs
+$ThrottleLimit                                          = '2'                                            # Throttle limit when using multi-threaded Jobs
 
 
 
@@ -67,6 +67,7 @@ function ShowMenuSelectUsers {
     Write-Host "(0) - Select Single User from Active Directory"
     Write-Host "(1) - Load from CSV File (SamaccountNames)"
     Write-Host "(2) - Run custom Get-Aduser command"
+    Write-Host "(3) - Get OneDrive Users Information"
 
     Write-host 
 
@@ -105,7 +106,19 @@ function ShowMenuSelectUsers {
 	}
 
     '3' {
-        # Check Home Drives for Permission issues
+        # Get OneDrive Users Information
+        CheckforPSliteDBModule
+        ImportPSliteDBModule
+        DatabaseConnection
+        SharePointModule
+        CheckMSonlineModule
+        ConnectMicrosoftOnline
+        AskForAdminCreds
+        FindAdminLogonID
+        ConnectMicrosoftSharePoint
+        CheckPermissionsOnline
+        PreloadOneDriveSites
+
 
 	}
 
@@ -125,7 +138,7 @@ function ShowMenuSelectOperations {
     Write-Host "(0) - Check a User for SharePoint Licence & Provisioned - SingleThread -in dev"
     Write-host "(1) - Check Home Drives for Permission Access issues - SingleThread"
     Write-host "(2) - Find PST Files on Home Drives - SingleThread"
-    Write-host "(3) - Perform Full Pre-migration Checks - SingleThread"
+    Write-host "(3) - Get All OneDrive Users - SingleThread"
     Write-host "(4) - Perform a User Home Drive permissions ADD using Takeowns - SingleThread"
     Write-host "(5) - Find the size of a users HomeDrive - SingleThread"
     Write-host 
@@ -221,7 +234,9 @@ function ShowMenuSelectOperations {
 	}
 
     '3' {
-        # Perform Full Pre-migration Checks - SingleThread
+        $Script:JobType = "Get All OneDrive Users - SingleThread"
+         Splitline
+
 
 	}
 
@@ -579,6 +594,8 @@ function DatabaseConnection () {
             New-LiteDBCollection GetHomeDirectorySize -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             New-LiteDBCollection TestPathHomeDrive -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             New-LiteDBCollection Operations -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+            New-LiteDBCollection OneDriveDetails -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+
             
 
         }
@@ -614,7 +631,7 @@ function CheckMSonlineModule () {
     TerminateScript	
     }
     WriteTransactionsLogs -Task "Importing Microsoft Online Module"  -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false   
-    Try {Import-Module Msonline -UseWindowsPowerShell -ea Stop
+    Try {Import-Module Msonline -UseWindowsPowerShell -ea Stop -WarningAction SilentlyContinue
     }
     Catch {WriteTransactionsLogs -Task "Failed Importing Microsoft Online Module, it needs to be installed" -Result Error -ErrorMessage "Online Module not installed" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true
         TerminateScript}
@@ -720,6 +737,9 @@ function ConnectMicrosoftSharePoint () {
     # Check Connection to SharePoint or Connect if not already
     if ($RequireConnectMicrosoftSharePoint -eq $true) {
 
+    # Import SharePoint Module
+    Import-Module Microsoft.Online.SharePoint.PowerShell -UseWindowsPowerShell -WarningAction SilentlyContinue
+
         try {
          try { Get-SPOTenant -ea stop | Out-Null;  WriteTransactionsLogs -Task "Existing SharePoint Connection Found" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false}
          catch {
@@ -740,8 +760,8 @@ function CheckPermissionsOnline () {
 
     $ValidPermissions = ''
     WriteTransactionsLogs -Task "Checking Online Permissions" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false 
-   if ($ValidPermissions -like $null){try {$ValidPermissions = Get-MsolRoleMember -RoleObjectId 62e90394-69f5-4237-9190-012177145e10 | Where-Object {$_.emailaddress -eq $userAdminID}; WriteTransactionsLogs -Task "Found Admin in Global Administrators" -Result Information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false} catch {WriteTransactionsLogs -Task "Permissions Error" -Result Information -ErrorMessage "Error happened searching Rbac Group" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false }}
-   if ($ValidPermissions -like $null){try {$ValidPermissions = Get-MsolRoleMember -RoleObjectId f28a1f50-f6e7-4571-818b-6a12f2af6b6c | Where-Object {$_.emailaddress -eq $userAdminID}; WriteTransactionsLogs -Task "Found Admin in SharePoint Service Administrator" -Result Information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false} catch {WriteTransactionsLogs -Task "Permissions Error" -Result Information -ErrorMessage "Error happened searching Rbac Group" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false}}   
+   if ($ValidPermissions -like $null){try {$ValidPermissions = Get-MsolRoleMember -RoleObjectId 62e90394-69f5-4237-9190-012177145e10 | Where-Object {$_.emailaddress -eq $userAdminID}; WriteTransactionsLogs -Task "Found Admin in Global Administrators" -Result Information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false} catch {WriteTransactionsLogs -Task "Permissions Error" -Result ERROR -ErrorMessage "Error happened searching Rbac Group - NOT A GLOBAL ADMIN" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false }}
+   if ($ValidPermissions -like $null){try {$ValidPermissions = Get-MsolRoleMember -RoleObjectId f28a1f50-f6e7-4571-818b-6a12f2af6b6c | Where-Object {$_.emailaddress -eq $userAdminID}; WriteTransactionsLogs -Task "Found Admin in SharePoint Service Administrator" -Result Information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false} catch {WriteTransactionsLogs -Task "Permissions Error" -Result ERROR -ErrorMessage "Error happened searching Rbac Group - NOT A SHAREPOINT ADMIN" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false}}   
    if ($ValidPermissions -like $null) {
        WriteTransactionsLogs -Task "Current user has no Permissions to perform the required actions" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false 
     TerminateScript	}
@@ -818,15 +838,26 @@ function ImportExclusionGroupsFile () {
 # FUNCTION - PreLoad OneDrive sites for checking
 function PreloadOneDriveSites () {
     
-    If ($true -eq $PreloadOneDriveSites){
+     try {WriteTransactionsLogs -Task "PreLoading OneDrive Sites...Please wait"    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+          $Global:OneDriveSites = Get-SPOSite -Template "SPSPERS" -Limit ALL -includepersonalsite $True -ea stop
+          
+          WriteTransactionsLogs -Task "Recording OneDrive Sites into Database...Please wait"    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+          # Load data into Database
+          Open-LiteDBConnection $DBName -Mode shared | Out-Null
+          
+          $OneDriveSitesArray = $Global:OneDriveSites | ConvertTo-LiteDbBSON -as array 
+          Add-LiteDBDocument 'OneDriveDetails' -BsonDocumentArray $OneDriveSitesArray -BatchSize 1000 -BulkInsert
+          
+          Close-liteDBConnection
+          WriteTransactionsLogs -Task "Completed PreLoading OneDrive Sites"    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
 
-        try {WriteTransactionsLogs -Task "PreLoading OneDrive Sites...Please wait"    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
-            $Global:OneDriveSites = Get-SPOSite -Template "SPSPERS" -Limit ALL -includepersonalsite $True -ea stop}
-        Catch {WriteTransactionsLogs -Task "Failed to get OneDrive Sites"    -Result Error -ErrorMessage 'Error:' -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true
-               TerminateScript}
-    }
 
+          }
+      Catch {WriteTransactionsLogs -Task "Failed to get OneDrive Sites"    -Result Error -ErrorMessage 'Error:' -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true
+             TerminateScript}
 }
+
+
 
 # FUNCTION - WriteTransaction Log function    
 function WriteTransactionsLogs  {
@@ -1573,7 +1604,7 @@ function BatchInformation{$function:BatchInformation}
 function SaveStoredResults{$function:SaveStoredResults}
 function CreateOperationCollector{$function:CreateOperationCollector}
 
-
+CreateOperationCollector
 
 "@)
 
