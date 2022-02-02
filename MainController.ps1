@@ -101,6 +101,26 @@ function ShowMenuSelectUsers {
 
     '2' {
         # Run custom Get-Aduser command
+        CheckforPSliteDBModule 
+        ImportPSliteDBModule
+        DatabaseConnection
+        Write-Host `n
+        Write-host "Enter Get-ADUser Search filter to find users" -ForegroundColor GREEN
+        Write-Host `n
+        Write-Host "Example: Displayname -eq ""Chris Healey""" -ForegroundColor DarkYellow
+        Write-Host "Example: Country -ne ""UK""'"               -ForegroundColor DarkYellow
+        Write-Host "Example: mail -like ""*@company.com"""     -ForegroundColor DarkYellow
+        Write-Host "Example: mail -like ""*@company.com"" -and Department -eq ""Sales"""  -ForegroundColor DarkYellow
+        Write-Host `n
+        [string]$script:CustomADSearch = Read-Host -Prompt "Enter filter"
+
+        if ($script:CustomADSearch -eq "") {WriteTransactionsLogs -Task "No filter was entered" -Result Error -ErrorMessage "No Filter" -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError False -ExportData false
+        ShowMenuSelectUsers}
+        Else{
+
+        ADFilterSearch
+    }
+
        
 
 	}
@@ -134,7 +154,7 @@ function ShowMenuSelectUsers {
 # FUNCTION - Request to continue the operation
 function ShowMenuSelectOperations {
     
-    Write-host 
+    Write-host '--------------------------------------------------------------------------------' -ForegroundColor DarkBlue
     Write-Host "(0) - Check a User for SharePoint Licence & Provisioned - SingleThread -in dev"
     Write-host "(1) - Check Home Drives for Permission Access issues - SingleThread"
     Write-host "(2) - Find PST Files on Home Drives - SingleThread"
@@ -146,31 +166,42 @@ function ShowMenuSelectOperations {
     Write-host "(21) - Perform a User Home Drive permissions ADD using Takeowns - MultiThread"
     Write-host "(22) - Find the size of a users HomeDrive - MultiThread"
     Write-host "(23) - Check Home Drives for Permission Access issues - MultiThread"
+    Write-host '--------------------------------------------------------------------------------' -ForegroundColor DarkBlue
 
-
+    Write-Host `n
     $input = read-host " *** Please select a number to perform the operation *** "
 
      switch ($input) `
     {
     '0' {
-        # Check a User for SharePoint Licence & Provisioned - SingleThread
+         $Script:JobType = "Check a User for SharePoint Licence & Provisioned - SingleThread"
+         Splitline
+         BatchInformation
+         CreateOperationCollector
                     
             Foreach ($ADUser in $ADUserInfo){
             
             # Build Strings
             $UPN                     = $ADUser.UserPrincipalName
             $SamaccountName          = $ADUser.SamaccountName
+            $Mail                    = $ADUser.Mail
             
             # Functions 
-            CheckMSonlineModule
+            CheckforPSliteDBModule
+            ImportPSliteDBModule
+            DatabaseConnection
             SharePointModule
-            AskForAdminCreds
+            CheckMSonlineModule
             ConnectMicrosoftOnline
-            ConnectMicrosoftSharePoint
+            AskForAdminCreds
             FindAdminLogonID
+            ConnectMicrosoftSharePoint
             CheckPermissionsOnline
-            ProvisionOneDriveUser
+            GetMsolUser
+            #ProvisionOneDriveUser
             SharePointCheckLicence
+            SaveStoredResults
+            Splitline
             }
 
 
@@ -844,6 +875,12 @@ function PreloadOneDriveSites () {
           WriteTransactionsLogs -Task "Recording OneDrive Sites into Database...Please wait"    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
           # Load data into Database
           Open-LiteDBConnection $DBName -Mode shared | Out-Null
+
+          # Clean up existing data if required
+          Remove-LiteDBCollection -Collection OneDriveDetails -ErrorAction SilentlyContinue -WarningAction SilentlyContinue -confirm:$false
+          # Create new collection
+          New-LiteDBCollection -Collection OneDriveDetails 
+
           
           $OneDriveSitesArray = $Global:OneDriveSites | ConvertTo-LiteDbBSON -as array 
           Add-LiteDBDocument 'OneDriveDetails' -BsonDocumentArray $OneDriveSitesArray -BatchSize 1000 -BulkInsert
@@ -976,25 +1013,6 @@ function WriteTransactionsLogs  {
  
 }
 
-# FUNCTION - Feed the script AD users information from Get-ADuser or CSV file
-function GetADUsersData () {
-
-    # Pull users from AD via script / search 
-
-    #$Users = Get-ADUser CAE1823 -Properties * | Where-Object {($_.enabled -eq "$true" -and $_.HomeDirectory -match "\\")} | Select-Object Displayname,Mail,HomeDirectory,Samaccountname,UserPrincipalName,AccountExpirationDate,accountExpires
-    #$Users = Get-ADUser CAE0542 -Properties * | Where-Object {($_.enabled -eq "$true" -and $_.HomeDirectory -match "\\")} | Select-Object Displayname,Mail,HomeDirectory,Samaccountname,UserPrincipalName,AccountExpirationDate,accountExpires,Enabled
-    #$Users = Get-ADUser cab1245 -Properties * | Where-Object {($_.enabled -eq "$true" -and $_.HomeDirectory -match "\\")} | Select-Object Displayname,Mail,HomeDirectory,Samaccountname,UserPrincipalName,AccountExpirationDate,accountExpires
-
-
-
-    # Get Users via CSV File
-
-    # Variables needed in script
-    $HomeDrivePath # users homedrive path
-    $SamaccountName
-    $Mail 
-}
-
 
 
 # FUNCTION - Get CSV Data from File
@@ -1052,6 +1070,27 @@ function SingleADUser () {
 
 
 
+}
+
+
+# FUNCTION - Customer AD Filter Search
+function ADFilterSearch () {
+
+    WriteTransactionsLogs -Task "Running customer AD Filter Search..... Please Wait" -Result Information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError False
+
+    try{$ADUserInfo = Get-ADuser -filter $script:CustomADSearch -Properties * -ea stop}
+    catch {WriteTransactionsLogs -Task "There was an error with the search filter, please check." -Result ERROR -ErrorMessage "ERROR : " -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError true
+        pause
+        ShowMenuSelectUsers}
+
+        # Calculate how many users are found and display results
+        $ADUserInfoCount = $ADUserInfo.samaccountname | Measure-Object | Select-Object -ExpandProperty count
+
+        WriteTransactionsLogs -Task "AD user(s) found $ADUserInfoCount from custom filter. Displaying first 5 results:" -Result Information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+        $ADUserInfo | Select SamaccountName,Displayname,mail | Out-GridView
+        Write-host 
+        Write-host 
+        ShowMenuSelectOperations
 }
 
 
@@ -1246,14 +1285,13 @@ function SharePointCheckLicence () {
     WriteTransactionsLogs -Task "Checking for SharePoint SKU" -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
     if ($MsolUser.Licenses.ServiceStatus.ServicePlan.ServiceName -eq "SHAREPOINTENTERPRISE"){$SharePointLicFound = $true
        WriteTransactionsLogs -Task "User is assigned a SharePoint SKU" -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
-       $Report | Add-Member -MemberType NoteProperty -Name SharePointLicence -Value $SharePointLicFound -Force
+       $script:Operations | Add-Member -MemberType NoteProperty -Name SharePointLicence -Value $SharePointLicFound -Force
 
    } Else {
-       WriteTransactionsLogs -Task "Check for SharePoint SKU Failed" -Result information -ErrorMessage "User has not SharePoint SKU or Failed check" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false
-       $Report | Add-Member -MemberType NoteProperty -Name SharePointLicence -Value "Not Assigned or has error" -Force
+       WriteTransactionsLogs -Task "Check for SharePoint SKU Failed" -Result ERROR -ErrorMessage "User has not SharePoint SKU or Failed check" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true
+       $script:Operations | Add-Member -MemberType NoteProperty -Name SharePointLicence -Value "Not Assigned or has error" -Force
    }
 }
-
 
 # FUNCTION - Provision User with OneDrive
 function ProvisionOneDriveUser () {
