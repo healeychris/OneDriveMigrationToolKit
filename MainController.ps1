@@ -155,7 +155,7 @@ function ShowMenuSelectUsers {
 function ShowMenuSelectOperations {
     
     Write-host '--------------------------------------------------------------------------------' -ForegroundColor DarkBlue
-    Write-Host "(0) - Check a User for SharePoint Licence & Provisioned - SingleThread -in dev"
+    Write-Host "(0) - PreMigration Check - PST/AppMember/Size/Item/Licence - SingleThread -in dev"
     Write-host "(1) - Check Home Drives for Permission Access issues - SingleThread"
     Write-host "(2) - Find Files on Home Drives - SingleThread"
     Write-host "(3) - Get All OneDrive Users - SingleThread"
@@ -177,10 +177,11 @@ function ShowMenuSelectOperations {
      switch ($input) `
     {
     '0' {
-         $Script:JobType = "Check a User for SharePoint Licence & Provisioned - SingleThread"
+         $Script:JobType = "PreMigration Check - PST/AppMember/Size/Item/Licence - SingleThread"
          Splitline
          BatchInformation
-         CreateOperationCollector      
+         CreateOperationCollector
+         AskForFileType      
          Foreach ($ADUser in $ADUserInfo){
             
             # Build Strings
@@ -193,16 +194,16 @@ function ShowMenuSelectOperations {
             CheckforPSliteDBModule
             ImportPSliteDBModule
             DatabaseConnection
-            SharePointModule
-            CheckMSonlineModule
-            ConnectMicrosoftOnline
-            AskForAdminCreds
-            FindAdminLogonID
-            ConnectMicrosoftSharePoint
-            CheckPermissionsOnline
-            GetMsolUser
-            #SharePointCheckLicence
+            GetServerShareSplit
+            TestConnection
+            TestPathHomeDrive
+            SimplePermissionsCheck
+            FindFiles
+            CheckExcludeGroupFile
+            ImportExclusionGroupsFile
+            CheckADGroupMembership           
             GetOneDriveDetails
+            GetHomeDirectorySize
             SaveStoredResults
             Splitline
             }
@@ -946,7 +947,7 @@ function CheckExcludeGroupFile () {
     WriteTransactionsLogs -Task "Checking For Exclude Group File............"    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false 
     if (! (Test-Path $ExcludeGroupFile)) {
 	    WriteTransactionsLogs -Task "Exclude Group File Check" -Result Information -ErrorMessage "Exclude File Not found for groups in expected location" -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false
-        $Global:ExcludeGroupFileNotFound = $false
+        $script:ExcludeGroupFileNotFound = $false
     } else {
         WriteTransactionsLogs -Task "Exclude Group File Check Located..........."    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false 
     }
@@ -956,7 +957,7 @@ function CheckExcludeGroupFile () {
 # FUNCTION - Import Exclusion Groups
 function ImportExclusionGroupsFile () {
 
-    if ($null -eq $ExcludeGroupFileNotFound){
+    if ($null -eq $script:ExcludeGroupFileNotFound){
         WriteTransactionsLogs -Task "Importing Exclude Group File............"    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false 
          
         try {$ExcludeGroups =  Get-content $ExcludeGroupFile
@@ -964,11 +965,53 @@ function ImportExclusionGroupsFile () {
             WriteTransactionsLogs -Task "Imported Exclude Group File and has $ExcludeGroupCount Groups listed!"    -Result Warning -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false
         }
         Catch {WriteTransactionsLogs -Task "Imported Exclude Group List Failed, Job will Continue"    -Result Error -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false
-            $ExcludeGroupFileNotFound = $false
         }
     }
 
 }
+
+
+# FUNCTION - Check if a user is part of a group
+function CheckADGroupMembership () {
+
+    if ($script:ExcludeGroupFileNotFound = $false){
+
+        # Create GroupContainer
+        $GroupmemberShip = ''
+
+        Foreach ($group in $ExcludeGroups){
+
+            #Get Group Displayname
+            try {$GroupDetails = Get-ADobject $Group -properties member -ea stop
+
+                $Groupname = $GroupDetails.Name
+            }
+            Catch{WriteTransactionsLogs -Task "Unable to find $group" -Result ERROR -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true
+            }
+
+            # Find User in group if member
+            if ($groupDetails | Where-Object {$_.member -contains $script:ADUserInfo.DistinguishedName}){
+                WriteTransactionsLogs -Task "Found User $UPN in $groupName" -Result information -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false
+            
+                # Build groups user is a member of
+                $GroupmemberShip += $Groupname+";"
+            }
+            Else {WriteTransactionsLogs -Task "$UPN Not a member of $groupName" -Result information -ShowScreenMessage true -ScreenMessageColour Green -IncludeSysError false
+            }
+        # Record values 
+        $script:Operations | Add-Member -MemberType NoteProperty -Name GroupMemberShip -Value $GroupmemberShip -Force
+        }
+    }   
+}
+
+    
+
+         
+
+
+
+
+
 
 
 # FUNCTION - PreLoad OneDrive sites for checking
@@ -1322,7 +1365,15 @@ function GetHomeDirectorySize () {
     if ($HomeDirectoryValid -eq $True) { # Change later in script as var not set anywhere
          
         # Use Robocopy and get size
-        $script:HomeDriveSize = (robocopy.exe $HomeDrivePath c:\fakepathduh /L /XJ /R:0 /W:1 /NP /E /BYTES /NFL /NDL /NJH /MT:64)[-4] -replace '\D+(\d+).*','$1'
+        $script:HomeDriveDetails = (robocopy.exe $HomeDrivePath c:\fakepathduh /L /XJ /R:0 /W:1 /NP /E /BYTES /NFL /NDL /NJH /MT:64)
+           
+        # Files
+        $HomeDriveFileCount = $script:HomeDriveDetails[-5] -replace '\D+(\d+).*','$1'
+        # Directories
+        $HomeDriveDirCount = $script:HomeDriveDetails[-6] -replace '\D+(\d+).*','$1'
+        # Size
+        $HomeDriveSize = $script:HomeDriveDetails[-4] -replace '\D+(\d+).*','$1'
+        # Create total size and use function to count bytes
         $TotalSize = FormatBytes $HomeDriveSize
               
     }
@@ -1330,13 +1381,16 @@ function GetHomeDirectorySize () {
         WriteTransactionsLogs -Task "Failed to get the HomeDirectory details" -Result Error -ErrorMessage "No Access or other error" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true
     } 
     
-    if ($HomeDriveSize -ge '0'){WriteTransactionsLogs -Task "$UPN has Home Drive Size of $TotalSize" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
-        $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeDirectorySize"-Value $TotalSize} 
-            
-    
+    if ($HomeDriveSize -ge '0'){WriteTransactionsLogs -Task "$UPN HomeDrive Size: $TotalSize / DIRS:$HomeDriveDirCount/ Files:$HomeDriveFileCount" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+        $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeDirectoryFileCount"-Value $HomeDriveFileCount
+        $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeDirectoryDirsCount"-Value $HomeDriveDirCount
+        $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeDirectorySize"-Value $TotalSize
+    } 
+        
    }
    Else {WriteTransactionsLogs -Task "Skipped Drive Size Check for $SamaccountName on $HomeDrivePath as failed simple drive access check" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
-        $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeDirectoryInfo"-Value 'Failed simple drive access check'}
+        $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeDirectoryInfo"-Value 'Failed simple drive access check'
+    }
 
 }
 
@@ -2003,7 +2057,9 @@ function SaveStoredResults{$function:SaveStoredResults}
 function CreateOperationCollector{$function:CreateOperationCollector}
 function AskForFileType{$function:AskForFileType}
 function SlowTakeOwnIcals{$function:SlowTakeOwnIcals}
-
+function CheckADGroupMembership{$function:CheckADGroupMembership}
+function ImportExclusionGroupsFile{$function:ImportExclusionGroupsFile}
+function CheckExcludeGroupFile{$function:CheckExcludeGroupFile}
 
 
 "@)
