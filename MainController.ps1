@@ -16,26 +16,26 @@
  ##
 
 ####### Variable list #######
-$Version                                                = "0.3"                                          # Version of script
+$Version                                                = "0.5"                                          # Version of script
 Clear-Host                                                                                               # Clear screen
 $host.ui.RawUI.WindowTitle                              = 'OneDrive Migration Tool Kit'                  # Set name in task bar
 $DBName                                                 = "OneDriveDiscovery.db"                         # Database Name used to store and create if not existing
 $ExcludeListFile                                        ='.\ExcludeUsers.txt'                            # List of Users to exclude by SAmaccountName
 $ExcludeGroupFile                                       ='.\ExcludeGroups.txt'                           # List of AD Groups by DN to exclude if a users is a member of
+$LicenceGroupsFile                                      ='.\LicenceGroups.txt'                           # List of AD Groups by DN to that contains E3/licences
 $CSVDataFile                                            ='.\ADUsers.csv'                                 # File for AD users when importing via CSV - use SamaccountName only
 
 
 $MFALoginRequired                                       = $true                                          # Is MFA required to login
 $RequireConnectMicrosoftOnline                          = $true                                          # Only required for MSol related discovery
 $RequireConnectMicrosoftSharePoint                      = $true                                          # Only needed to connect to SharePoint Online Services
-$PreloadOneDriveSites                                   = $true                                          # Used to preload OneDrive sites and not perform single lookups
 $AdminSiteURL                                           = "https://cnainsurance-admin.sharepoint.com"    # Admin URL for Tenant
 $PermissionsGroup                                       = "Domain Admins"                                # Permissions object to add to ACL permissions
 $AdminPermissions                                       = "CNAW2K\Domain Admins"                         # Permissions to be check on directory when using get-acl
 $IgnoreDirectories                                      = "Windows PowerShell|.cache"                    # Directories to be excluded from checking when running get-acl
 $PreloadOneDriveSites                                   = $true                                          # Preload all OneDrive details and not one at a time
 $DatabaseConnected                                      = $false                                         # Preset Database connection to false, reset on DB connection function
-$ThrottleLimit                                          = '15'                                            # Throttle limit when using multi-threaded Jobs
+$ThrottleLimit                                          = '20'                                           # Throttle limit when using multi-threaded Jobs
 
 
 
@@ -68,6 +68,7 @@ function ShowMenuSelectUsers {
     Write-Host "(1) - Load from CSV File (SamaccountNames)"
     Write-Host "(2) - Run custom Get-Aduser command"
     Write-Host "(3) - Get OneDrive Users Information"
+    Write-Host "(4) - Reports"
 
     Write-host 
 
@@ -118,11 +119,8 @@ function ShowMenuSelectUsers {
         ShowMenuSelectUsers}
         Else{
 
-        ADFilterSearch
-    }
-
-       
-
+        ADFilterSearch}
+    
 	}
 
     '3' {
@@ -142,6 +140,14 @@ function ShowMenuSelectUsers {
 
 	}
 
+    '4' {
+        # Open Report Menu
+        CheckforPSliteDBModule
+        ImportPSliteDBModule
+        DatabaseConnection
+        ShowReportMenu
+	}
+
     
 
     default {
@@ -155,13 +161,18 @@ function ShowMenuSelectUsers {
 function ShowMenuSelectOperations {
     
     Write-host '--------------------------------------------------------------------------------' -ForegroundColor DarkBlue
-    Write-Host "(0) - PreMigration Check - PST/AppMember/Size/Item/Licence - SingleThread -in dev"
-    Write-host "(1) - Check Home Drives for Permission Access issues - SingleThread"
-    Write-host "(2) - Find Files on Home Drives - SingleThread"
-    Write-host "(3) - Get All OneDrive Users - SingleThread"
-    Write-host "(4) - Perform a User Home Drive permissions ADD using Takeowns - SingleThread"
-    Write-host "(5) - Find the size of a users HomeDrive - SingleThread"
-    Write-host "(6) - Slow takeown and Icals - SingleThread"
+    Write-Host "(00) - PreMigration Check - PST/AppMember/Size/Item/Licence - SingleThread"
+    Write-host "(01) - Check Home Drives for Permission Access issues - SingleThread"
+    Write-host "(02) - Find Files on Home Drives - SingleThread"
+    Write-host "(03) - Get All OneDrive Users - SingleThread - in Dev"
+    Write-host "(04) - Perform a User Home Drive permissions ADD using Takeowns - SingleThread"
+    Write-host "(05) - Find the size of a users HomeDrive - SingleThread"
+    Write-host "(06) - Slow takeown and Icals - SingleThread"
+    Write-host "(07) - Find the AppData Directory Size - SingleThread"
+    Write-host "(08) - Make users HomeDrive Read Only (ACL) - SingleThread"
+    Write-host "(09) - Create CSV Migration File for SharePoint Online"
+    Write-host "(10) - Rename Users HomeDrive Share to Removed Access"
+
 
     Write-host 
     Write-host "(20) - Find Files on Home Drives - MultiThread"
@@ -169,6 +180,9 @@ function ShowMenuSelectOperations {
     Write-host "(22) - Find the size of a users HomeDrive - MultiThread"
     Write-host "(23) - Check Home Drives for Permission Access issues - MultiThread"
     Write-host "(24) - Perform Slow Takeown & Icals - MultiThread"
+    Write-host "(25) - PreMigration Check - PST/AppMember/Size/Item/Licence - MultiThread"  
+    Write-host "(26) - Find the AppData Directory Size - MultiThread"  
+    Write-host "(27) - Make users HomeDrive Read Only (ACL) - MultiThread"  
     Write-host '--------------------------------------------------------------------------------' -ForegroundColor DarkBlue
 
     Write-Host `n
@@ -176,18 +190,25 @@ function ShowMenuSelectOperations {
    
      switch ($input) `
     {
-    '0' {
+'00' {
          $Script:JobType = "PreMigration Check - PST/AppMember/Size/Item/Licence - SingleThread"
          Splitline
          BatchInformation
          CreateOperationCollector
-         AskForFileType      
+         CheckLicenceGroupFile
+         ImportLicenceGroupsFile
+         AskForFileType
+               
          Foreach ($ADUser in $ADUserInfo){
             
             # Build Strings
-            $UPN                     = $ADUser.Mail
+            $HomeDrivePath           = $ADUser.HomeDirectory
+            $UPN                     = $ADUser.UserPrincipalName
             $SamaccountName          = $ADUser.SamaccountName
             $Mail                    = $ADUser.Mail
+            $UserDistinguishedName   = $ADUser.DistinguishedName
+
+            [string]$HomedriveServer = $HomeDrivePath -split '\\' | select-object -Skip 2 -Last 1
             
             # Functions 
             SingleThreadUpdate
@@ -198,9 +219,8 @@ function ShowMenuSelectOperations {
             TestConnection
             TestPathHomeDrive
             SimplePermissionsCheck
+            CheckADGroupMembershipForLicence
             FindFiles
-            CheckExcludeGroupFile
-            ImportExclusionGroupsFile
             CheckADGroupMembership           
             GetOneDriveDetails
             GetHomeDirectorySize
@@ -213,7 +233,7 @@ function ShowMenuSelectOperations {
 
     }
     
-    '1' {
+'01' {
         $Script:JobType = 'Check Home Drives for Permission Access issues - SingleThread'
          # Functions
          Splitline
@@ -241,7 +261,7 @@ function ShowMenuSelectOperations {
          
     }
 
-    '2' {
+'02' {
         $Script:JobType = 'Find Files on Home Drives - SingleThread'
 
             # Functions
@@ -271,14 +291,14 @@ function ShowMenuSelectOperations {
 
 	}
 
-    '3' {
+'03' {
         $Script:JobType = "Get All OneDrive Users - SingleThread"
          Splitline
 
 
 	}
 
-    '4' {
+'04' {
         # 
         $Script:JobType = 'Perform a User Home Drive permissions ADD using Takeowns - SingleThread'
          # Functions
@@ -308,7 +328,7 @@ function ShowMenuSelectOperations {
 
 	}
 
-    '5' {
+'05' {
         # Find the size of a users HomeDrive - SingleThread
          $Script:JobType = 'Find the size of a users HomeDrive - SingleThread'
 
@@ -338,7 +358,7 @@ function ShowMenuSelectOperations {
 
 	}
 
-    '6' {
+'06' {
         # Slow takeown and Icals - SingleThread
          $Script:JobType = 'Perform Slow Takeown & Icals - SingleThread'
 
@@ -363,12 +383,124 @@ function ShowMenuSelectOperations {
             SlowTakeOwnIcals
             SaveStoredResults
             Splitline
-            }
+        }
 
+    
 
 	}
 
-    '20' {
+'07' {
+        $Script:JobType = 'Find the AppData Directory Size - SingleThread'
+
+            # Functions
+            Splitline
+            BatchInformation
+            CreateOperationCollector
+            Foreach ($ADUser in $ADUserInfo){
+            
+            # Build Strings
+            $HomeDrivePath           = $ADUser.HomeDirectory
+            $UPN                     = $ADUser.UserPrincipalName
+            $SamaccountName          = $ADUser.SamaccountName
+            [string]$HomedriveServer = $HomeDrivePath -split '\\' | select-object -Skip 2 -Last 1
+            
+            # Functions
+            SingleThreadUpdate
+            GetServerShareSplit
+            TestConnection
+            TestPathHomeDrive
+            SimplePermissionsCheck
+            GetHomeAppDataDirectorySize
+            SaveStoredResults
+            Splitline 
+            
+        }   
+
+	}
+
+'08' {
+        $Script:JobType = 'Make users HomeDrive Read Only - SingleThread'
+
+            # Functions
+            Splitline
+            BatchInformation
+            CreateOperationCollector
+            Foreach ($ADUser in $ADUserInfo){
+            
+            # Build Strings
+            $HomeDrivePath           = $ADUser.HomeDirectory
+            $UPN                     = $ADUser.UserPrincipalName
+            $SamaccountName          = $ADUser.SamaccountName
+            [string]$HomedriveServer = $HomeDrivePath -split '\\' | select-object -Skip 2 -Last 1
+            
+            # Functions
+            SingleThreadUpdate
+            GetServerShareSplit
+            TestConnection
+            TestPathHomeDrive
+            SimplePermissionsCheck
+            MakeHomeDriveReadOnly
+            SaveStoredResults
+            Splitline 
+            
+        }   
+
+	}
+
+'09' {
+        $Script:JobType = 'Create CSV Migration File for SharePoint Online"'
+
+            # Functions
+            Splitline
+            Foreach ($ADUser in $ADUserInfo){
+            
+            # Build Strings
+            $HomeDrivePath           = $ADUser.HomeDirectory
+            $UPN                     = $ADUser.UserPrincipalName
+            $SamaccountName          = $ADUser.SamaccountName
+            $Mail                    = $ADUser.Mail
+            
+            # Functions
+            SingleThreadUpdate
+            ExportSharePointCSVList
+            Splitline 
+            
+        }   
+
+	}
+
+'10' {
+        $Script:JobType = 'Rename Users HomeDrive Share to Removed Access'
+
+            # Functions
+            Splitline
+            BatchInformation
+            CreateOperationCollector
+            Foreach ($ADUser in $ADUserInfo){
+            
+            # Build Strings
+            $HomeDrivePath           = $ADUser.HomeDirectory
+            $UPN                     = $ADUser.UserPrincipalName
+            $SamaccountName          = $ADUser.SamaccountName
+            [string]$HomedriveServer = $HomeDrivePath -split '\\' | select-object -Skip 2 -Last 1
+            
+            # Functions
+            SingleThreadUpdate
+            GetServerShareSplit
+            TestConnection
+            TestPathHomeDrive
+            RenameUserHomeFolder
+            SaveStoredResults
+            Splitline 
+            
+        }   
+
+	}
+
+
+
+
+'20' {
         # 
          $Script:JobType = 'Find Files on Home Drives - MultiThread'
          # Functions
@@ -507,6 +639,7 @@ function ShowMenuSelectOperations {
 
 
 	}
+
 '23' {
         #
         $Script:JobType = 'Check Home Drives for Permission Access issues - MultiThread'
@@ -600,6 +733,156 @@ function ShowMenuSelectOperations {
 
 	}
 
+'25' {
+        # 
+         $Script:JobType = 'PreMigration Check - PST/AppMember/Size/Item/Licence - MultiThread'
+         # Functions
+         Splitline
+         BatchInformation
+         AskForFileType
+
+            Foreach ($ADUser in $ADUserInfo){
+            
+            # Build Strings
+            $HomeDrivePath           = $ADUser.HomeDirectory
+            $UPN                     = $ADUser.UserPrincipalName
+            $SamaccountName          = $ADUser.SamaccountName
+            $Mail                    = $ADUser.Mail
+            $UserDistinguishedName   = $ADUser.DistinguishedName
+            [string]$HomedriveServer = $HomeDrivePath -split '\\' | select-object -Skip 2 -Last 1
+
+            
+            # Run Multithread call
+            $job = Start-ThreadJob -ThrottleLimit $ThrottleLimit  -InitializationScript $export_functions -ScriptBlock {
+            $nextbatch = $using:nextbatch
+            $HomeDrivePath = $using:HomeDrivePath
+            $UPN = $using:UPN
+            $SamaccountName = $Using:SamaccountName
+            $mail = $using:mail
+            $HomedriveServer = $Using:HomeDriveServer
+            $DBName = $using:DBName
+            $Script:JobType = $using:JobType
+            $UserDistinguishedName = $using:UserDistinguishedName
+            $ExcludeGroupFile = $using:ExcludeGroupFile
+            $LicenceGroupsFile = $using:LicenceGroupsFile
+            $script:FileType = $using:FileType
+
+            CheckforPSliteDBModule
+            ImportPSliteDBModule
+            DatabaseConnection
+            CheckLicenceGroupFile
+            ImportLicenceGroupsFile
+            CreateOperationCollector
+            GetServerShareSplit
+            TestConnection
+            TestPathHomeDrive
+            SimplePermissionsCheck
+            CheckADGroupMembershipForLicence
+            FindFiles
+            CheckExcludeGroupFile
+            ImportExclusionGroupsFile
+            CheckADGroupMembership           
+            GetOneDriveDetails
+            GetHomeDirectorySize
+            SaveStoredResults
+
+
+            } | Out-Null
+
+
+            } # Close foreach
+            MultithreadGetEvents
+            WriteTransactionsLogs -Task "Finished $Script:JobType" -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false   
+
+
+	}
+
+'26' {
+     # Find the size of a users AppData HomeDrive - MultiThread
+        $Script:JobType = 'Find the size of a users AppData HomeDrive - MultiThread'
+         # Functions
+         Splitline
+         BatchInformation
+
+            Foreach ($ADUser in $ADUserInfo){
+            
+            # Build Strings
+            $HomeDrivePath           = $ADUser.HomeDirectory
+            $UPN                     = $ADUser.UserPrincipalName
+            $SamaccountName          = $ADUser.SamaccountName
+            [string]$HomedriveServer = $HomeDrivePath -split '\\' | select-object -Skip 2 -Last 1
+
+            
+            # Run Multithread call
+            $job = Start-ThreadJob -ThrottleLimit $ThrottleLimit  -InitializationScript $export_functions -ScriptBlock {
+            $Script:JobType = $using:JobType
+            $nextbatch = $using:nextbatch
+            $HomeDrivePath = $using:HomeDrivePath
+            $UPN = $using:UPN
+            $SamaccountName = $Using:SamaccountName
+            $HomedriveServer = $Using:HomeDriveServer
+            $DBName = $using:DBName
+            CheckforPSliteDBModule
+            ImportPSliteDBModule
+            DatabaseConnection
+            CreateOperationCollector
+            GetServerShareSplit
+            TestConnection
+            TestPathHomeDrive
+            SimplePermissionsCheck
+            GetHomeAppDataDirectorySize
+            SaveStoredResults
+            } | Out-Null
+
+
+            } # Close foreach
+            MultithreadGetEvents       
+
+
+	}
+
+'27' {
+     # Make users HomeDrive Read Only - MultiThread
+        $Script:JobType = 'Make users HomeDrive Read Only - MultiThread'
+         # Functions
+         Splitline
+         BatchInformation
+
+            Foreach ($ADUser in $ADUserInfo){
+            
+            # Build Strings
+            $HomeDrivePath           = $ADUser.HomeDirectory
+            $UPN                     = $ADUser.UserPrincipalName
+            $SamaccountName          = $ADUser.SamaccountName
+            [string]$HomedriveServer = $HomeDrivePath -split '\\' | select-object -Skip 2 -Last 1
+
+            
+            # Run Multithread call
+            $job = Start-ThreadJob -ThrottleLimit $ThrottleLimit  -InitializationScript $export_functions -ScriptBlock {
+            $Script:JobType = $using:JobType
+            $nextbatch = $using:nextbatch
+            $HomeDrivePath = $using:HomeDrivePath
+            $UPN = $using:UPN
+            $SamaccountName = $Using:SamaccountName
+            $HomedriveServer = $Using:HomeDriveServer
+            $DBName = $using:DBName
+            CheckforPSliteDBModule
+            ImportPSliteDBModule
+            DatabaseConnection
+            CreateOperationCollector
+            GetServerShareSplit
+            TestConnection
+            TestPathHomeDrive
+            SimplePermissionsCheck
+            MakeHomeDriveReadOnly
+            SaveStoredResults
+            } | Out-Null
+
+
+            } # Close foreach
+            MultithreadGetEvents       
+	}
+
     default {
         write-host 'You may only answer MigrateUser or AssignPolicies, please try again.'
         ShowMenuSelectOperations
@@ -607,6 +890,81 @@ function ShowMenuSelectOperations {
     }
 }
 
+function ShowReportMenu {
+    
+    Write-host 
+    Write-Host "(0) - Show All Batch Information"
+    Write-Host "(1) - Export Batch information By ID"
+    Write-Host "(2) - Export OneDrive Information"
+    Write-Host "(3) - Export File Search Results by Batch ID"
+    Write-Host "(4) - Search Transactions by SamaccountName"
+
+    Write-host 
+
+
+    $input = read-host " *** Please select a number to perform the operation *** "
+
+     switch ($input) `
+    {
+    '0' {
+        # Show All Batch Information
+        Splitline
+        Open-LiteDBConnection $DBName -Mode shared | Out-Null
+        Find-LiteDBDocument -Collection 'BatchInformation' | Select-Object _ID,JobType,DateJobCreation,UserCount | Sort-Object DateJobCreation | Format-Table -AutoSize
+        Splitline
+        ShowReportMenu
+
+    }
+    
+    '1' {
+        # Export Batch information By ID
+        AskForBatchID
+        ExportOperationsByBatchID
+        AskToExportReport
+        ShowReportMenu
+       
+
+    }
+
+    '2' {
+        # Export OneDrive Information
+        Splitline
+        Open-LiteDBConnection $DBName -Mode shared | Out-Null
+        $ReportData = Find-LiteDBDocument -Collection 'OneDriveDetails' -limit 999999 
+        Splitline
+        $SaveMyFile = Get-Filename
+        $ReportData | Export-Csv -Path $SaveMyFile
+        ShowReportMenu
+
+    
+	}
+
+    '3' {
+        # Export File Search Results by Batch ID
+        AskForBatchID
+        ExportFileSearchByBatchID
+        AskToExportReport       
+        ShowReportMenu
+
+
+	}
+
+    '4' {
+        # Search Transactions by SamaccountName
+        AskForSamaccountID
+        SearchTransationBySamaccountName
+        AskToExportReport
+        ShowReportMenu
+
+
+	}   
+
+    default {
+        write-host 'You may select one of the options'
+        ShowReportMenu
+    }   
+    }
+}
 
 # FUNCTION - Update Status Bar with Progress
 function SingleThreadUpdate () {
@@ -728,9 +1086,7 @@ function DatabaseConnection () {
             # Create Collections in Database
             WriteTransactionsLogs -Task "Checking for Database Collections" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError False -ExportData False
             New-LiteDBCollection Transactions -ErrorAction SilentlyContinue -WarningAction SilentlyContinue 
-            New-LiteDBCollection UserReports -ErrorAction SilentlyContinue -WarningAction SilentlyContinue 
             New-LiteDBCollection BatchInformation -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-            New-LiteDBCollection PSTSessionDetails -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             New-LiteDBCollection FileSessionDetails -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             New-LiteDBCollection Operations -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             New-LiteDBCollection OneDriveDetails -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
@@ -944,23 +1300,34 @@ function ImportExcludeList () {
 # FUNCTION - Check Exclude group File
 function CheckExcludeGroupFile () {
 
-    WriteTransactionsLogs -Task "Checking For Exclude Group File............"    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false 
-    if (! (Test-Path $ExcludeGroupFile)) {
-	    WriteTransactionsLogs -Task "Exclude Group File Check" -Result Information -ErrorMessage "Exclude File Not found for groups in expected location" -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false
-        $script:ExcludeGroupFileNotFound = $false
+    if (Test-Path $ExcludeGroupFile) {
+	    WriteTransactionsLogs -Task "Exclude Group File Check Located..........."    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+        $script:ExcludeGroupFileFound = $true
     } else {
-        WriteTransactionsLogs -Task "Exclude Group File Check Located..........."    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false 
+        WriteTransactionsLogs -Task "Exclude Group File Check" -Result Information -ErrorMessage "Exclude File Not found for groups in expected location" -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false 
     }
 }
+
+
+# FUNCTION - Check Licence group File exists
+function CheckLicenceGroupFile () {
+
+    if (Test-Path $LicenceGroupsFile) {
+	    WriteTransactionsLogs -Task "Licence Group File Check Located..........."    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+        $script:LicenceGroupsFileFound = $true
+    } else {
+        WriteTransactionsLogs -Task "Licence Group File Check" -Result Information -ErrorMessage "Exclude File Not found for groups in expected location" -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false 
+    }
+}
+
 
 
 # FUNCTION - Import Exclusion Groups
 function ImportExclusionGroupsFile () {
 
-    if ($null -eq $script:ExcludeGroupFileNotFound){
-        WriteTransactionsLogs -Task "Importing Exclude Group File............"    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false 
-         
-        try {$ExcludeGroups =  Get-content $ExcludeGroupFile
+    if ($true -eq $script:ExcludeGroupFileFound){
+                 
+        try {$script:ExcludeGroups =  Get-content $ExcludeGroupFile
             $ExcludeGroupCount = $ExcludeGroups | Measure-Object | Select-Object -ExpandProperty Count
             WriteTransactionsLogs -Task "Imported Exclude Group File and has $ExcludeGroupCount Groups listed!"    -Result Warning -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false
         }
@@ -971,46 +1338,21 @@ function ImportExclusionGroupsFile () {
 }
 
 
-# FUNCTION - Check if a user is part of a group
-function CheckADGroupMembership () {
+# FUNCTION - Import Licence Groups File
+function ImportLicenceGroupsFile () {
 
-    if ($script:ExcludeGroupFileNotFound = $false){
-
-        # Create GroupContainer
-        $GroupmemberShip = ''
-
-        Foreach ($group in $ExcludeGroups){
-
-            #Get Group Displayname
-            try {$GroupDetails = Get-ADobject $Group -properties member -ea stop
-
-                $Groupname = $GroupDetails.Name
-            }
-            Catch{WriteTransactionsLogs -Task "Unable to find $group" -Result ERROR -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true
-            }
-
-            # Find User in group if member
-            if ($groupDetails | Where-Object {$_.member -contains $script:ADUserInfo.DistinguishedName}){
-                WriteTransactionsLogs -Task "Found User $UPN in $groupName" -Result information -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false
-            
-                # Build groups user is a member of
-                $GroupmemberShip += $Groupname+";"
-            }
-            Else {WriteTransactionsLogs -Task "$UPN Not a member of $groupName" -Result information -ShowScreenMessage true -ScreenMessageColour Green -IncludeSysError false
-            }
-        # Record values 
-        $script:Operations | Add-Member -MemberType NoteProperty -Name GroupMemberShip -Value $GroupmemberShip -Force
+    if ($true -eq $script:LicenceGroupsFileFound){
+                 
+        try {$script:LicenceGroups =  Get-content $LicenceGroupsFile
+            $LicenceGroupsFileCount = $script:LicenceGroups | Measure-Object | Select-Object -ExpandProperty Count
+            WriteTransactionsLogs -Task "Imported Licence Group File and has $LicenceGroupsFileCount Groups listed!"    -Result Warning -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false
+            $script:LicenceGroupFileLoaded = $true
         }
-    }   
+        Catch {WriteTransactionsLogs -Task "Imported Licence Group List Failed, Job will Continue"    -Result Error -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError false
+        }
+    }
+
 }
-
-    
-
-         
-
-
-
-
 
 
 
@@ -1018,7 +1360,7 @@ function CheckADGroupMembership () {
 function PreloadOneDriveSites () {
     
      try {WriteTransactionsLogs -Task "PreLoading OneDrive Sites...Please wait"    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
-          $Global:OneDriveSites = Get-SPOSite -Template "SPSPERS" -Limit ALL -includepersonalsite $True -ea stop
+          $Global:OneDriveSites = Get-SPOSite -Template "SPSPERS" -Limit ALL -includepersonalsite $True -ea stop | Select Owner,StorageUsageCurrent,URL
           
           WriteTransactionsLogs -Task "Recording OneDrive Sites into Database...Please wait"    -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
           # Load data into Database
@@ -1102,6 +1444,7 @@ function WriteTransactionsLogs  {
         $TransactionLogScreen | Add-Member -MemberType NoteProperty -Name "Result" -Value $Result
         $TransactionLogScreen | Add-Member -MemberType NoteProperty -Name "Error" -Value $ErrorMessage
         $TransactionLogScreen | Add-Member -MemberType NoteProperty -Name "SystemError" -Value $SysErrorMessage
+        $TransactionLogScreen | Add-Member -MemberType NoteProperty -Name "SamAccountName" -Value $samaccountname
         
        
         # Output to screen
@@ -1145,6 +1488,7 @@ function WriteTransactionsLogs  {
         $TransactionLogFile | Add-Member -MemberType NoteProperty -Name "Result"-Value "$result"
         $TransactionLogFile | Add-Member -MemberType NoteProperty -Name "Error"-Value "$ErrorMessage"
         $TransactionLogFile | Add-Member -MemberType NoteProperty -Name "SystemError"-Value "$SysErrorMessage"
+        $TransactionLogFile | Add-Member -MemberType NoteProperty -Name "SamaccountName"-Value "$SamaccountName"
  
         # Connect to Database
         if ($script:DatabaseConnected -eq $true){Open-LiteDBConnection $DBName -Mode shared | Out-Null}
@@ -1215,7 +1559,8 @@ function SingleADUser () {
         $ADUserInfoDisplayName = $ADUserInfo.DisplayName
         WriteTransactionsLogs -Task "Found AD User $ADUserInfoDisplayName" -Result Information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError False    
     }
-    Catch {WriteTransactionsLogs -Task "User was not found" -Result Error -ErrorMessage "Not Found in AD" -ShowScreenMessage true -ScreenMessageColour red -IncludeSysError True}
+    Catch {WriteTransactionsLogs -Task "User was not found" -Result Error -ErrorMessage "Not Found in AD" -ShowScreenMessage true -ScreenMessageColour red -IncludeSysError True
+        SingleADUser}
 
 
 
@@ -1287,6 +1632,7 @@ function AskForFileType () {
     }
    
 }
+
 
 
 ######################## Admin functions #####################################
@@ -1381,7 +1727,7 @@ function GetHomeDirectorySize () {
         WriteTransactionsLogs -Task "Failed to get the HomeDirectory details" -Result Error -ErrorMessage "No Access or other error" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true
     } 
     
-    if ($HomeDriveSize -ge '0'){WriteTransactionsLogs -Task "$UPN HomeDrive Size: $TotalSize / DIRS:$HomeDriveDirCount/ Files:$HomeDriveFileCount" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+    if ($HomeDriveSize -ge '0'){WriteTransactionsLogs -Task "$UPN HomeDrive Size: $TotalSize | Directories:$HomeDriveDirCount| Files:$HomeDriveFileCount" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
         $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeDirectoryFileCount"-Value $HomeDriveFileCount
         $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeDirectoryDirsCount"-Value $HomeDriveDirCount
         $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeDirectorySize"-Value $TotalSize
@@ -1393,6 +1739,115 @@ function GetHomeDirectorySize () {
     }
 
 }
+
+
+# FUNCTION - Get HomeDrive Size
+function GetHomeAppDataDirectorySize () {
+
+    if ($Global:AllowDriveAccess -eq $true){
+
+    WriteTransactionsLogs -Task "Calculating AppData Size.....Please Wait" -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+        
+    if ($HomeDirectoryValid -eq $True) { # Change later in script as var not set anywhere
+         
+        # Use Robocopy and get size
+        $script:HomeDriveDetails = (robocopy.exe $HomeDrivePath\Data\AppData c:\fakepathduh /L /XJ /R:0 /W:1 /NP /E /BYTES /NFL /NDL /NJH /MT:64)
+           
+        # Files
+        $HomeDriveFileCount = $script:HomeDriveDetails[-5] -replace '\D+(\d+).*','$1'
+        # Directories
+        $HomeDriveDirCount = $script:HomeDriveDetails[-6] -replace '\D+(\d+).*','$1'
+        # Size
+        $HomeDriveSize = $script:HomeDriveDetails[-4] -replace '\D+(\d+).*','$1'
+        # Create total size and use function to count bytes
+        $TotalSize = FormatBytes $HomeDriveSize
+              
+    }
+    Else {
+        WriteTransactionsLogs -Task "Failed to get the AppData HomeDirectory details" -Result Error -ErrorMessage "No Access or other error" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true
+    } 
+    
+    if ($HomeDriveSize -ge '0'){WriteTransactionsLogs -Task "$UPN AppData HomeDrive Size: $TotalSize | Directories:$HomeDriveDirCount| Files:$HomeDriveFileCount" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+        $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeAppDataDirectoryFileCount"-Value $HomeDriveFileCount
+        $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeAppDataDirectoryDirsCount"-Value $HomeDriveDirCount
+        $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeAppDataDirectorySize"-Value $TotalSize
+    } 
+        
+   }
+   Else {WriteTransactionsLogs -Task "Skipped Drive Size Check for $SamaccountName on $HomeDrivePath as failed simple drive access check" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+        $script:Operations | Add-Member -MemberType NoteProperty -Name "HomeDirectoryInfo"-Value 'Failed simple drive access check'
+    }
+
+}
+
+
+
+# FUNCTION - Check if a user is part of a group
+function CheckADGroupMembership () {
+
+    if ($true -eq $script:ExcludeGroupFileFound){
+
+        # Create GroupContainer
+        $GroupmemberShip = ''
+
+        Foreach ($group in $script:ExcludeGroups){
+
+            # Get Group Displayname
+            try {$GroupDetails = Get-ADobject $Group -properties member -ea stop
+
+                $Groupname = $GroupDetails.Name
+            }
+            Catch{WriteTransactionsLogs -Task "Unable to find $group" -Result ERROR -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true -ExportData false
+            }
+
+            # Find User in group if member
+            if ($GroupDetails | Where-Object {$_.member -contains $UserDistinguishedName}){
+                WriteTransactionsLogs -Task "Found User $SamaccountName in $groupName" -Result information -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false
+            
+                # Build groups user is a member of
+                $GroupmemberShip += $Groupname+";"
+            }
+            Else {WriteTransactionsLogs -Task "$SamaccountName Not a member of $groupName" -Result information -ShowScreenMessage true -ScreenMessageColour Green -IncludeSysError false
+            }
+        # Record values 
+        $script:Operations | Add-Member -MemberType NoteProperty -Name GroupMemberShip -Value $GroupmemberShip -Force
+        }
+    }   
+}
+
+# FUNCTION - Check if a user is part of the licence group
+function CheckADGroupMembershipForLicence () {
+
+    if ($true -eq $script:LicenceGroupFileLoaded){
+
+        # Create GroupContainer
+        $GroupmemberShip = ''
+
+        Foreach ($group in $script:LicenceGroups){
+
+            # Get Group Displayname
+            try {$GroupDetails = Get-ADobject $Group -properties member -ea stop
+
+                $Groupname = $GroupDetails.Name
+            }
+            Catch{WriteTransactionsLogs -Task "Unable to find $group" -Result ERROR -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true -ExportData false
+            }
+
+            # Find User in group if member
+            if ($GroupDetails | Where-Object {$_.member -contains $UserDistinguishedName}){
+                WriteTransactionsLogs -Task "Found User $SamaccountName in $groupName" -Result information -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false
+            
+                # Build groups user is a member of
+                $GroupmemberShip += $Groupname+";"
+            }
+            Else {WriteTransactionsLogs -Task "$SamaccountName Not a member of $groupName" -Result information -ShowScreenMessage true -ScreenMessageColour Green -IncludeSysError false
+            }
+        # Record values 
+        $script:Operations | Add-Member -MemberType NoteProperty -Name LicenseGroupMemberShip -Value $GroupmemberShip -Force
+        }
+    }   
+}
+
 
 
 # FUNCTION - Check access using Get-ACL on directories to see access denied errors
@@ -1452,6 +1907,25 @@ function CheckAccessDirectories () {
 }
 
 
+# FUNCTION - Rename Users Home Drive Folder
+function RenameUserHomeFolder () {
+
+    # Create var to host replacement char
+    $DateRename = Get-date -f yyyymmdd
+    $ReplaceChar = '-DEL-'
+    # Set th Error ActionPerference as Rename-item does not handle failed events
+    $ErrorActionPreference = 'Stop'
+
+    WriteTransactionsLogs -Task "Performing Rename of $HomeDrivePath on user $samAccountName" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false
+    
+    try {
+        Rename-Item $HomeDrivePath $HomeDrivePath$ReplaceChar$DateRename -ErrorAction Stop -Force
+        WriteTransactionsLogs -Task "Rename Completed for $HomeDrivePath to $HomeDrivePath$ReplaceChar$DateRename" -Result Information -ErrorMessage "None" -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false}
+
+    Catch{WriteTransactionsLogs -Task "Rename Failed for $HomeDrivePath to $HomeDrivePath$ReplaceChar$DateRename" -Result ERROR -ErrorMessage "UnableToProcess: " -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true}
+}
+
+
 # FUNCTION - Get Directories force takeown and Icals
 function SingleDirectoryForceTakeOwnIcals () {
 
@@ -1500,17 +1974,17 @@ function GetOneDriveDetails () {
 
     # Open database and check for existing user
     Open-LiteDBConnection $DBName -Mode shared | Out-Null
-    $SearchResultsOneDrive = Find-LiteDBDocument -Collection 'OneDriveDetails' | Where-Object {$_.owner -eq $UPN}
+    $SearchResultsOneDrive = Find-LiteDBDocument -Collection 'OneDriveDetails' -limit 999999  | Where-Object {$_.owner -eq $Mail}
     Close-liteDBConnection
 
     # Check for data if not perform a lookup of the user via SharePoint
     if ($SearchResultsOneDrive) { 
 
         # Build Strings
-        $OneDriveCurrentSize = $SearchResultsOneDrive.StorageUsageCurrent
+        [string]$OneDriveCurrentSize = $SearchResultsOneDrive.StorageUsageCurrent
         $OneDriveURL = $SearchResultsOneDrive.url
         
-        WriteTransactionsLogs -Task "$UPN is Provisioned for OneDrive" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+        WriteTransactionsLogs -Task "$Mail is Provisioned for OneDrive" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
         $script:Operations  | Add-Member -MemberType NoteProperty -Name OneDriveProvisioned -Value $true -Force
         $script:Operations  | Add-Member -MemberType NoteProperty -Name OneDriveCurrentSize -Value $OneDriveCurrentSize -Force
         $script:Operations  | Add-Member -MemberType NoteProperty -Name OneDriveURL -Value $OneDriveURL -Force
@@ -1518,27 +1992,44 @@ function GetOneDriveDetails () {
         
     }
     Else {
-
-        WriteTransactionsLogs -Task "$UPN OneDrive Data not found in Database, Requesting it from SharePoint Online" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false
-         $SearchResultsDrive = Get-SPOSite -Template "SPSPERS" -Limit ALL -includepersonalsite $True -Filter "owner -eq $UPN"     
-         }
-
-    if ($SearchResultsOneDrive) {
         
-        # Build Strings
-        $OneDriveCurrentSize = $SearchResultsOneDrive.StorageUsageCurrent
-        $OneDriveURL = $SearchResultsOneDrive.url
-        
-        WriteTransactionsLogs -Task "$UPN is Provisioned for OneDrive" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
-        $script:Operations  | Add-Member -MemberType NoteProperty -Name OneDriveProvisioned -Value $true -Force
-        $script:Operations  | Add-Member -MemberType NoteProperty -Name OneDriveCurrentSize -Value $OneDriveCurrentSize -Force
-        $script:Operations  | Add-Member -MemberType NoteProperty -Name OneDriveURL -Value $OneDriveURL -Force
-        WriteTransactionsLogs -Task "Current OneDrive Size is $OneDriveCurrentSize MB" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false 
+        WriteTransactionsLogs -Task "$Mail OneDrive Data not found in Database, Ensure OneDrive data is up to data, run option 3" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false 
+        $script:Operations  | Add-Member -MemberType NoteProperty -Name OneDriveProvisioned -Value $false -Force
+        $script:Operations  | Add-Member -MemberType NoteProperty -Name OneDriveCurrentSize -Value '0' -Force
+        $script:Operations  | Add-Member -MemberType NoteProperty -Name OneDriveURL -Value 'Not Provisioned' -Force
+        }
+}
+
+
+# FUNCTION - Create Export SharePoint Migrations
+function ExportSharePointCSVList () {
+
+    WriteTransactionsLogs -Task "Generating CSV Migration Export for $Mail" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
+    
+    # Open database and check for existing user
+    Open-LiteDBConnection $DBName -Mode shared | Out-Null
+    $SearchResultsOneDrive = Find-LiteDBDocument -Collection 'OneDriveDetails' -limit 999999 | Where-Object {$_.owner -eq $Mail}
+    Close-liteDBConnection
+
+    # Build strings for data export
+    $OneDriveURL  = $SearchResultsOneDrive.url
+
+    # Check if file exists before been created
+    $MigrationResultsFile  = ".\SharePointMigration_$((get-date).ToString('yyyyMMdd')).csv"        # Results file from Output
+    $MigrationResultsFileCheck =  Test-path $MigrationResultsFile 
+
+
+    # Create File to export results
+    if ($MigrationResultsFileCheck -eq $true){
+
+        # Export to File
+        Add-Content "$HomeDrivePath,,,$OneDriveURL,Documents," -path $MigrationResultsFile
     }
     Else {
-
-        WriteTransactionsLogs -Task "$UPN does not look to be Provisioned for OneDrive" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError false
-        }      
+        # Export to File to create headers in file
+        Add-Content -Value "FileSharePath,,,SharePointSite,DocLibrary," -path $MigrationResultsFile
+        Add-Content "$HomeDrivePath,,,$OneDriveURL,Documents," -path $MigrationResultsFile
+    }
 
 }
 
@@ -1553,6 +2044,7 @@ function GetMsolUser () {
     }
 }
 
+
 # FUNCTION - Check for excluded user
 function CheckForExcludedUser () {
 
@@ -1564,6 +2056,7 @@ function CheckForExcludedUser () {
         }
     }
 }
+
 
 # FUNCTION - Reset Ownship on Folders and Files
 function TakeownTool () {
@@ -1585,6 +2078,7 @@ function TakeownTool () {
             $script:Operations | Add-Member -MemberType NoteProperty -Name "TakeownRun"-Value $false
             }
 }
+
 
 # FUNCTION - Add icacls Domain Admins Permssions
 function IcaclsPermissions () {
@@ -1628,6 +2122,21 @@ function IcaclsPermissionsfix () {
 }
 
 
+# FUNCTION - Make Home Drive Read only
+function MakeHomeDriveReadOnly () {
+
+    # Build string
+    $switches = ':(OI)(CI)RX'
+    
+    WriteTransactionsLogs -Task "Running icacls on $HomeDrivePath to make Read Only...Please wait..." -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false    
+    icacls $HomeDrivePath\  /grant:r "$SamaccountName$switches" /T /C /Q
+
+    # Build PScustomObject
+    $script:Operations | Add-Member -MemberType NoteProperty -Name "MakeHomeDriveReadOnly"-Value $True
+    WriteTransactionsLogs -Task "Finished making Drive Read Only for $HomeDrivePath" -Result information -ErrorMessage "none" -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false    
+}
+
+
 # FUNCTION - None impacting Takeown and ICALS
 function SlowTakeOwnIcals () {
 
@@ -1655,9 +2164,11 @@ function SlowTakeOwnIcals () {
                 $Counter ++
                 Write-Progress -Activity "Processing Files and Folders on $HomeDrivePath" -CurrentOperation $Object -PercentComplete (($Counter / $Objects.count) *100)
 
-                Takeown.exe /f $Object /A >$Null
+                Takeown.exe /f $Object /A
+                #Takeown.exe /f $Object /A >$Null
           
-                icacls $Object /q /grant "Domain Admins$switches" /C /grant "$SamaccountName$switches" /C >$null
+                #icacls $Object /q /grant "Domain Admins$switches" /C /grant "$SamaccountName$switches" /C >$null
+                icacls $Object /grant "cnasurety.net\Domain Admins$switches" /C /grant "$SamaccountName$switches" /C /grant "cna.com\Domain Admins$switches" /C 
 
          
     }
@@ -1681,90 +2192,6 @@ function SlowTakeOwnIcals () {
 }
 
 
-
-
-# FUNCTION - Find PST Files on the users HomeDirectory - old
-function FindPSTFiles () {
-
-    if ($Global:AllowDriveAccess -eq $true){
-
-    WriteTransactionsLogs -Task "Starting PST Search for $SamaccountName on $HomeDrivePath" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
-
-    # Find PST files via RoboCopy
-    $PSTFilesRAW = Invoke-Expression -Command "Robocopy $HomeDrivePath NULL /L /S /NJH /NJS /FP /NC /NDL /NS /XJ /R:0 /W:0 *.pst"
-    $PSTFilesRaw = $PSTFilesRaw.Trim()
-    $PSTFilesList =  $PSTFilesRaw.Split('',[System.StringSplitOptions]::RemoveEmptyEntries)
-    $PSTFileCount = $PSTFilesList | Measure-Object | Select-Object -ExpandProperty count
-    #$PSTFilesList
-
-    WriteTransactionsLogs -Task "Completed PST Search for $SamaccountName on $HomeDrivePath and found $PSTFileCount PST's" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
-    $JobCurrentStatus = 'Completed'
-    $script:Operations | Add-Member -MemberType NoteProperty -Name "PSTFilesFound"-Value $PSTFileCount -force
-    
-   
-    if ($PSTFilesList){
-        foreach ($PSTFile in $PSTFilesList){
-
-        try{$PSTFileData = Get-ChildItem -path $PSTFile -ea SilentlyContinue |  Select-Object Name,CreationTime,LastWriteTime,LastAccessTime,fullname,Length}
-        catch{WriteTransactionsLogs -Task "Failed getting PST File for $SamaccountName on $HomeDrivePath" -Result ERROR -ErrorMessage "Error:" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError true}
-        
-        $Name             =       [string]$PSTFileData.Name
-        $CreationTime     =       $PSTFileData.CreationTime
-        $LastWriteTime    =       $PSTFileData.LastWriteTime
-        $LastAccessTime   =       $PSTFileData.LastAccessTime
-        $FullName         =       [string]$PSTFileData.FullName
-        $Length           =       $PSTFileData.Length
-
-
-        # Work out size of file and convert into KB/MB/GB/TB...
-        $FileSize = FormatBytes $Length
-     
-
-        # Date
-        $DateNow = Get-Date -f g  
-
-
-        # Construct AD Searcher
-        $ADSearcher = New-Object DirectoryServices.DirectorySearcher -Property @{Filter = "(samaccountname=$SamaccountName)"}
-        $ADResult = $ADSearcher.Findone()
-        [string]$SMTPAddress = $ADResult.Properties.mail 
-
-        # If not address found build string to say not found
-        If (!$SMTPAddress){$SMTPAddress = 'No Address Found for User'}
-
-         # Build PScustomObject
-
-        $PSTSessionDetails  = @()
-        $PSTSessionDetails = [pscustomobject][ordered]@{}
-        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "BatchID" -Value "$nextbatch" -force
-        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "Samaccountname"-Value $Samaccountname
-        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "HomeDirectory"-Value $HomeDrivePath
-        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "Name"-Value $name
-        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "CreationTime"-Value $CreationTime
-        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "LastWriteTime"-Value $LastWriteTime
-        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "LastAccessTime"-Value $LastAccessTime
-        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "fullname"-Value $fullname
-        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "FileSize"-Value $FileSize
-        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "ServerName"-Value $HomedriveServer
-        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "WhenDiscovered"-Value $DateNow
-        $PSTSessionDetails | Add-Member -MemberType NoteProperty -Name "OwnerSMTPaddress"-Value $SMTPAddress
-
-        # Add Batch Details to Database 
-        Open-LiteDBConnection $DBName -Mode shared | Out-Null
-        $PSTSessionDetails | ConvertTo-LiteDbBSON | Add-LiteDBDocument -Collection PSTSessionDetails
-        Close-liteDBConnection
-
-        }
-        
-   }
-   $script:Operations | Add-Member -MemberType NoteProperty -Name "PSTSearchInformation"-Value 'Completed' -force
-
-   }
-   Else {WriteTransactionsLogs -Task "Skipped PST Search for $SamaccountName on $HomeDrivePath as failed simple drive access check" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
-    $script:Operations | Add-Member -MemberType NoteProperty -Name "PSTSearchInformation"-Value 'Skipped due to Drive Access Check Fail' -force}
-}
-
-###
 # FUNCTION - Find Files on the users HomeDirectory
 function FindFiles () {
 
@@ -1839,14 +2266,13 @@ function FindFiles () {
         }
         
    }
-   $script:Operations | Add-Member -MemberType NoteProperty -Name "FileSearchInformation"-Value 'Completed' -force
+   $script:Operations | Add-Member -MemberType NoteProperty -Name "FileSearchInformation"-Value "Completed for $script:FileType" -force
 
    }
    Else {WriteTransactionsLogs -Task "Skipped $script:FileType Search for $SamaccountName on $HomeDrivePath as failed simple drive access check" -Result Information -ErrorMessage none -ShowScreenMessage true -ScreenMessageColour GREEN -IncludeSysError false
     $script:Operations | Add-Member -MemberType NoteProperty -Name "FileSearchInformation"-Value 'Skipped due to Drive Access Check Fail' -force}
 }
 
-###
 
 # FUNCTION - Simple check for access permission issues in DATA directories 
 function SimplePermissionsCheck () {
@@ -1964,6 +2390,7 @@ function BatchInformation () {
 
 }
 
+
 # FUNCTION - Create operation collector
 function CreateOperationCollector () {
 
@@ -1974,6 +2401,7 @@ function CreateOperationCollector () {
 
 
 }
+
 
 # FUNCTION - Check Powershell version 
 function CheckPSVersion () {
@@ -1989,12 +2417,11 @@ function CheckPSVersion () {
     Write-host
 
     Exit
-       
-    
+           
     }
 
-
 }
+
 
 # FUNCTION - Store Collected Data
 function SaveStoredResults () {
@@ -2007,6 +2434,7 @@ function SaveStoredResults () {
     $script:Operations  | Add-Member -MemberType NoteProperty -Name "HomeDrivePath" -Value $HomeDrivePath -force
     $script:Operations  | Add-Member -MemberType NoteProperty -Name "JobType" -Value $JobType -force
     $script:Operations  | Add-Member -MemberType NoteProperty -Name "Date" -Value $datenow -force
+    $script:Operations  | Add-Member -MemberType NoteProperty -Name "Mail" -Value $mail -force
 
     # Add Batch Details to Database 
     Open-LiteDBConnection $DBName -Mode shared | Out-Null
@@ -2023,6 +2451,111 @@ function SaveStoredResults () {
 
 }
 
+##################### Report Functions #######################
+
+function AskForBatchID () {
+
+    Splitline
+    $Script:BatchIDValue = Read-Host -Prompt "Enter the BATCH ID of the Job to Export"
+    Splitline
+    Write-Host `n
+    if ($Script:BatchIDValue -eq "") {WriteTransactionsLogs -Task "BATCH ID not entered" -Result Error -ErrorMessage "No batch ID entered" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError False
+        Write-Host `n
+        AskForBatchID 
+    }
+   
+}
+# FUNCTION ASk for SAmaccount ID
+function AskForSamaccountID () {
+
+    Splitline
+    $script:SamaccountNameValue = Read-Host -Prompt "Enter the SAmaccountName ID"
+    Splitline
+    Write-Host `n
+    if ($script:SamaccountNameValue -eq "") {WriteTransactionsLogs -Task "SamaccountName not entered" -Result Error -ErrorMessage "No Sam ID entered" -ShowScreenMessage true -ScreenMessageColour RED -IncludeSysError False
+        Write-Host `n
+        AskForSamaccountID 
+    }
+   
+}
+
+# FUNCTION - Export Operations based on BatchID
+function ExportOperationsByBatchID () {
+
+    # Show report data and tee-object to var for export
+    Open-LiteDBConnection $DBName -Mode shared | Out-Null
+    Find-LiteDBDocument -Collection 'Operations' -Limit 999999 | Where-Object {$_.BatchID -eq $script:BatchIDValue} | Select-Object *
+    $ReportData = Find-LiteDBDocument -Collection 'Operations' -Limit 999999 | Where-Object {$_.BatchID -eq $script:BatchIDValue}
+
+    if ($ReportData) {
+        # Store the report data in script var
+        $script:ReportData = $ReportData}
+    Else {WriteTransactionsLogs -Task "No Batch data found for $script:BatchIDValue " -Result Warning -ErrorMessage "No Batch DataFound" -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError False
+        AskForBatchID
+    }
+
+}
+
+# FUNCTION - Export File Search Results based on BatchID
+function ExportFileSearchByBatchID () {
+
+    # Show report data and tee-object to var for export
+    Open-LiteDBConnection $DBName -Mode shared | Out-Null
+    Find-LiteDBDocument -Collection 'FileSessionDetails' -Limit 999999 | Where-Object {$_.BatchID -eq $script:BatchIDValue} | Select-Object *
+    $ReportData = Find-LiteDBDocument -Collection 'FileSessionDetails' -Limit 999999 | Where-Object {$_.BatchID -eq $script:BatchIDValue}
+
+    if ($ReportData) {
+        # Store the report data in script var
+        $script:ReportData = $ReportData}
+    Else {WriteTransactionsLogs -Task "No Batch data found for $script:BatchIDValue " -Result Warning -ErrorMessage "No Batch DataFound" -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError False
+        AskForBatchID
+    }
+
+}
+
+
+# FUNCTION - Search by Samaccount ID for transactions
+function SearchTransationBySamaccountName () {
+
+    # Show report data and tee-object to var for export
+    Open-LiteDBConnection $DBName -Mode shared | Out-Null
+    Find-LiteDBDocument -Collection 'Transactions' -Limit 999999 | Where-Object {$_.SamaccountName -eq $script:SamaccountNameValue} | Select-Object *
+    $ReportData = Find-LiteDBDocument -Collection 'Transactions' -Limit 999999 | Where-Object {$_.SamaccountName -eq $script:SamaccountNameValue} 
+
+    if ($ReportData) {
+        # Store the report data in script var
+        $script:ReportData = $ReportData}
+    Else {WriteTransactionsLogs -Task "No Batch data found for $script:SamaccountnameValue " -Result Warning -ErrorMessage "No Batch DataFound" -ShowScreenMessage true -ScreenMessageColour YELLOW -IncludeSysError False
+        AskForSamaccountID 
+    }
+}
+
+
+# FUNCTION - Export Report data stored in the $script:ReportData Var
+function AskToExportReport () {
+
+    $Input = Read-Host -Prompt "Do you want to export the current report data to File" 
+    If ($Input -match 'No') {ShowReportMenu}
+    if ($Input -match 'Yes') { 
+            
+        $SaveMyFile = Get-Filename
+        $script:ReportData | Export-Csv -Path $SaveMyFile
+        
+    }
+
+}
+
+# FUNCTION - Save File GUI
+Function Get-FileName($initialDirectory) {   
+    [System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") |
+    Out-Null
+
+    $SaveFileDialog = New-Object System.Windows.Forms.SaveFileDialog
+    $SaveFileDialog.initialDirectory = $initialDirectory
+    $SaveFileDialog.filter = "CSV file (*.csv)|*.csv| All Files (*.*)|*.*";
+    $SaveFileDialog.ShowDialog() | Out-Null
+    $SaveFileDialog.filename
+}
 
 
 # Export functions for multithread scripts
@@ -2031,7 +2564,7 @@ $export_functions = [scriptblock]::Create(@"
 function GetServerShareSplit {$function:GetServerShareSplit}
 function TestConnection {$function:TestConnection}
 function TestPathHomeDrive  {$function:TestPathHomeDrive}
-function FindPSTFiles {$function:FindPSTFiles}
+function FindFiles {$function:FindFiles}
 function WriteTransactionsLogs {$function:WriteTransactionsLogs}
 function FormatBytes{$function:FormatBytes}
 function DatabaseConnection{$function:DatabaseConnection}
@@ -2060,8 +2593,12 @@ function SlowTakeOwnIcals{$function:SlowTakeOwnIcals}
 function CheckADGroupMembership{$function:CheckADGroupMembership}
 function ImportExclusionGroupsFile{$function:ImportExclusionGroupsFile}
 function CheckExcludeGroupFile{$function:CheckExcludeGroupFile}
-
-
+function GetOneDriveDetails{$function:GetOneDriveDetails}
+function CheckLicenceGroupFile{$function:CheckLicenceGroupFile}
+function CheckADGroupMembershipForLicence{$function:CheckADGroupMembershipForLicence}
+function ImportLicenceGroupsFile{$function:ImportLicenceGroupsFile}
+function GetHomeAppDataDirectorySize{$function:GetHomeAppDataDirectorySize}
+function MakeHomeDriveReadOnly{$function:MakeHomeDriveReadOnly}
 "@)
 
 
@@ -2069,5 +2606,4 @@ function CheckExcludeGroupFile{$function:CheckExcludeGroupFile}
 DisplayExtendedInfo
 CheckPSVersion
 ShowMenuSelectUsers
-
 
